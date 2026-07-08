@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# env / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# local agent state (SQLite store, user config/exclude-list overrides)
+.life-update-agent/
+
+# Node / frontend
+node_modules/
+dist/
+
+# Rust / Tauri
+target/
+app-shell/src-tauri/gen/
+
+# Packaging build artifacts (fetched/built by scripts, not committed)
+agent/build/
+app-shell/src-tauri/ollama-runtime/
+app-shell/src-tauri/binaries/
+app-shell/src-tauri/resources/
+
+# OS / editors
+.DS_Store
+.idea/

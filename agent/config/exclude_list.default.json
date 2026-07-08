@@ -1,0 +1,22 @@
+{
+  "apps": [
+    "1Password",
+    "Bitwarden",
+    "KeePassXC",
+    "LastPass",
+    "Keychain Access"
+  ],
+  "title_patterns": [
+    "(?i)\\bbank\\b",
+    "(?i)\\bpaypal\\b",
+    "(?i)\\bwise\\b",
+    "(?i)\\bcoinbase\\b",
+    "(?i)\\brobinhood\\b",
+    "(?i)\\bvenmo\\b",
+    "(?i)\\bchase\\b",
+    "(?i)\\bwells fargo\\b",
+    "(?i)\\bpassword\\b",
+    "(?i)\\bincognito\\b",
+    "(?i)\\bprivate browsing\\b"
+  ]
+}
