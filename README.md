@@ -187,10 +187,29 @@ Tesseract as resources, so the `.app`/`.dmg` runs standalone - no
 ./scripts/fetch-ollama.sh        # downloads Ollama's macOS runtime -> src-tauri/ollama-runtime/
 ./scripts/bundle-tesseract.sh    # relocates local Homebrew tesseract -> src-tauri/tesseract-runtime/
 ./scripts/prepare-resources.sh   # stages all three into src-tauri/resources/ for bundling
-npm run tauri build              # -> src-tauri/target/release/bundle/{macos,dmg}/
+npm run tauri:build              # -> src-tauri/target/aarch64-apple-darwin/release/bundle/{macos,dmg}/
 ```
 
-`bundle-tesseract.sh` requires `brew install tesseract dylibbundler` locally.
+`bundle-tesseract.sh` requires an arm64 Homebrew install (`brew install
+tesseract dylibbundler`) - if `tesseract`/`dylibbundler` resolve from an
+Intel Homebrew at `/usr/local` instead of the native one at
+`/opt/homebrew`, the bundled binary comes out x86_64 (verify with `file
+src-tauri/tesseract-runtime/tesseract`, expect `arm64`).
+
+**Always use `npm run tauri:build`, never plain `npm run tauri build`.**
+On a machine where `rustup`/`cargo` are themselves x86_64 running under
+Rosetta (`rustc -vV` reports `host: x86_64-apple-darwin` even on Apple
+Silicon - check with `arch`, which reports the real CPU), a plain build
+defaults to the compiler's own host triple and silently produces an
+**Intel-only main binary** even on an arm64 Mac. This actually shipped
+once: the `.app` opened fine here (Rosetta made it invisible locally) but
+failed on another Apple Silicon Mac with "app is damaged, move to Bin" -
+a harder Gatekeeper failure than the usual "can't verify" warning,
+because it wasn't just unsigned, it also needed Rosetta and had an
+invalid signature for the translated slice. `tauri:build` bakes in
+`--target aarch64-apple-darwin` so this can't silently regress. If
+`rustup target list --installed` doesn't show `aarch64-apple-darwin`, add
+it with `rustup target add aarch64-apple-darwin` first.
 
 `agent.rs`/`ollama_process.rs` resolve the bundled resources at runtime if
 present and fall back to `uv run`/system `ollama` otherwise - the same dev
@@ -223,11 +242,12 @@ something bundled.
 ## Status
 
 Layers 1-5 (capture, redaction, local storage, idle-gated inference, sync)
-and Layer 7 (packaging) are done: `npm run tauri build` produces a working
-`.dmg` with a frozen Python daemon and bundled Ollama runtime, verified to
-launch, show the correct name/icon in the Dock, and correctly reuse (not
-duplicate) an already-running system Ollama. Model weights are
-download-on-first-run rather than bundled, to keep the installer small.
+and Layer 7 (packaging) are done: `npm run tauri:build` produces a working,
+correctly-arm64 `.dmg` with a frozen Python daemon and bundled Ollama
+runtime, verified to launch, show the correct name/icon in the Dock, and
+correctly reuse (not duplicate) an already-running system Ollama. Model
+weights are download-on-first-run rather than bundled, to keep the
+installer small.
 Screen watching (opt-in OCR/vision capture) is built and verified
 end-to-end, including a real vision-model call that correctly described
 actual on-screen work, and Tesseract is now bundled the same way Ollama is
