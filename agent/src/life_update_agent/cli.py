@@ -7,12 +7,25 @@ import signal
 import threading
 
 from life_update_agent import daemon, db, worker
-from life_update_agent.config import load_settings, save_exclude_list, save_selected_model
+from life_update_agent.capture.frame_queue import FrameQueue
+from life_update_agent.config import (
+    load_settings,
+    save_exclude_list,
+    save_screen_capture_interval_seconds,
+    save_screen_watch_enabled,
+    save_selected_model,
+    save_vision_engine,
+)
 from life_update_agent.inference.models import MODEL_CHOICES, MODEL_NAMES
 from life_update_agent.inference.ollama_client import (
     OllamaError,
     ensure_model_available,
     list_local_models,
+)
+from life_update_agent.inference.vision_models import (
+    VISION_CHOICES,
+    VISION_ENGINE_NAMES,
+    is_ollama_backed,
 )
 
 
@@ -31,13 +44,23 @@ def _cmd_run(_args: argparse.Namespace) -> None:
     except OllamaError as e:
         logging.warning("could not verify/pull %s: %s (will retry inside the worker loop)", settings.ollama_model, e)
 
+    if settings.screen_watch_enabled and is_ollama_backed(settings.vision_engine):
+        try:
+            ensure_model_available(settings.ollama_host, settings.vision_engine, _print_pull_progress)
+        except OllamaError as e:
+            logging.warning(
+                "could not verify/pull vision engine %s: %s (will retry inside the worker loop)",
+                settings.vision_engine, e,
+            )
+
     stop_event = threading.Event()
     signal.signal(signal.SIGINT, lambda *_: stop_event.set())
     signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
 
-    daemon.run(settings, stop_event)
+    frame_queue = FrameQueue()
+    daemon.run(settings, stop_event, frame_queue)
     worker_thread = threading.Thread(
-        target=worker.run, args=(settings, stop_event), name="inference-worker", daemon=True
+        target=worker.run, args=(settings, stop_event, frame_queue), name="inference-worker", daemon=True
     )
     worker_thread.start()
 
@@ -167,6 +190,73 @@ def _cmd_model_choose(args: argparse.Namespace) -> None:
     print(f"switched to {args.name}")
 
 
+def _cmd_vision_list(args: argparse.Namespace) -> None:
+    settings = load_settings()
+    try:
+        local_models = list_local_models(settings.ollama_host)
+    except OllamaError:
+        local_models = None  # Ollama unreachable - still show the registry
+
+    if args.json:
+        print(json.dumps([
+            {
+                "name": v.name,
+                "size": v.size_human,
+                "description": v.description,
+                "selected": v.name == settings.vision_engine,
+                "downloaded": (
+                    True if not is_ollama_backed(v.name) else
+                    (None if local_models is None else v.name in local_models)
+                ),
+            }
+            for v in VISION_CHOICES
+        ]))
+        return
+
+    if local_models is None:
+        print("(could not reach ollama - showing registry only, not download status)")
+
+    for v in VISION_CHOICES:
+        marker = "*" if v.name == settings.vision_engine else " "
+        downloaded = ""
+        if is_ollama_backed(v.name) and local_models is not None:
+            downloaded = " [downloaded]" if v.name in local_models else ""
+        print(f"{marker} {v.name:<16} {v.size_human:>8}   {v.description}{downloaded}")
+
+
+def _cmd_vision_choose(args: argparse.Namespace) -> None:
+    if args.name not in VISION_ENGINE_NAMES:
+        valid = ", ".join(sorted(VISION_ENGINE_NAMES))
+        raise SystemExit(f"unknown vision engine {args.name!r} - choose one of: {valid}")
+
+    if is_ollama_backed(args.name):
+        settings = load_settings()
+        try:
+            ensure_model_available(settings.ollama_host, args.name, _print_pull_progress)
+        except OllamaError as e:
+            raise SystemExit(f"failed to pull {args.name}: {e}") from e
+
+    save_vision_engine(args.name)
+    print(f"switched to {args.name}")
+
+
+def _cmd_screen_enable(_args: argparse.Namespace) -> None:
+    save_screen_watch_enabled(True)
+    print("Screen watching enabled. Restart `life-update-agent run` for this to take effect.")
+
+
+def _cmd_screen_disable(_args: argparse.Namespace) -> None:
+    save_screen_watch_enabled(False)
+    print("Screen watching disabled.")
+
+
+def _cmd_screen_interval(args: argparse.Namespace) -> None:
+    if args.seconds <= 0:
+        raise SystemExit("interval must be a positive number of seconds")
+    save_screen_capture_interval_seconds(args.seconds)
+    print(f"Screen capture interval set to {args.seconds:.0f}s")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="life-update-agent")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -204,6 +294,30 @@ def build_parser() -> argparse.ArgumentParser:
     model_choose_parser = model_sub.add_parser("choose", help="select a model, pulling it via Ollama if needed")
     model_choose_parser.add_argument("name")
     model_choose_parser.set_defaults(func=_cmd_model_choose)
+
+    vision_parser = sub.add_parser("vision", help="manage the OCR/vision engine used for screen watching")
+    vision_sub = vision_parser.add_subparsers(dest="vision_command", required=True)
+
+    vision_list_parser = vision_sub.add_parser("list", help="show the curated vision engine choices")
+    vision_list_parser.add_argument("--json", action="store_true", help="machine-readable output")
+    vision_list_parser.set_defaults(func=_cmd_vision_list)
+
+    vision_choose_parser = vision_sub.add_parser("choose", help="select a vision engine, pulling it via Ollama if needed")
+    vision_choose_parser.add_argument("name")
+    vision_choose_parser.set_defaults(func=_cmd_vision_choose)
+
+    screen_parser = sub.add_parser("screen", help="manage screen watching (opt-in, off by default)")
+    screen_sub = screen_parser.add_subparsers(dest="screen_command", required=True)
+
+    screen_enable_parser = screen_sub.add_parser("enable", help="turn screen watching on")
+    screen_enable_parser.set_defaults(func=_cmd_screen_enable)
+
+    screen_disable_parser = screen_sub.add_parser("disable", help="turn screen watching off")
+    screen_disable_parser.set_defaults(func=_cmd_screen_disable)
+
+    screen_interval_parser = screen_sub.add_parser("interval", help="set the screen capture interval")
+    screen_interval_parser.add_argument("seconds", type=float)
+    screen_interval_parser.set_defaults(func=_cmd_screen_interval)
 
     return parser
 

@@ -35,6 +35,11 @@ export function Settings() {
   const [newPattern, setNewPattern] = useState("");
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [autostart, setAutostart] = useState(false);
+  const [visionEngines, setVisionEngines] = useState<ModelInfo[]>([]);
+  const [visionPulling, setVisionPulling] = useState<string | null>(null);
+  const [visionPullProgress, setVisionPullProgress] = useState<PullProgress | null>(null);
+  const [screenWatchEnabled, setScreenWatchEnabled] = useState(false);
+  const [screenInterval, setScreenInterval] = useState(120);
 
   useEffect(() => {
     isAutostartEnabled().then(setAutostart).catch(() => {});
@@ -57,6 +62,19 @@ export function Settings() {
     invoke<ExcludeList>("get_exclude_list").then(setExcludeList).catch(() => {});
   }, []);
 
+  const refreshVisionEngines = useCallback(() => {
+    invoke<ModelInfo[]>("list_vision_engines").then(setVisionEngines).catch(() => {});
+  }, []);
+
+  const refreshScreenWatchSettings = useCallback(() => {
+    invoke<{ enabled: boolean; interval_seconds: number }>("get_screen_watch_settings")
+      .then((s) => {
+        setScreenWatchEnabled(s.enabled);
+        setScreenInterval(s.interval_seconds);
+      })
+      .catch(() => {});
+  }, []);
+
   const refreshStatus = useCallback(() => {
     invoke<boolean>("is_agent_running").then(setRunning).catch(() => {});
     invoke<AgentStatus>("agent_status").then(setStatus).catch(() => {});
@@ -66,19 +84,31 @@ export function Settings() {
     refreshModels();
     refreshExcludeList();
     refreshStatus();
+    refreshVisionEngines();
+    refreshScreenWatchSettings();
     const interval = setInterval(refreshStatus, 5000);
     return () => clearInterval(interval);
-  }, [refreshModels, refreshExcludeList, refreshStatus]);
+  }, [refreshModels, refreshExcludeList, refreshStatus, refreshVisionEngines, refreshScreenWatchSettings]);
 
   usePullProgress(
     useCallback((p) => {
-      setPullProgress(p);
-      if (p.status === "success") {
-        setPulling(null);
-        setPullProgress(null);
-        refreshModels();
+      if (pulling) {
+        setPullProgress(p);
+        if (p.status === "success") {
+          setPulling(null);
+          setPullProgress(null);
+          refreshModels();
+        }
       }
-    }, [refreshModels]),
+      if (visionPulling) {
+        setVisionPullProgress(p);
+        if (p.status === "success") {
+          setVisionPulling(null);
+          setVisionPullProgress(null);
+          refreshVisionEngines();
+        }
+      }
+    }, [pulling, visionPulling, refreshModels, refreshVisionEngines]),
   );
 
   async function toggleAgent() {
@@ -100,6 +130,32 @@ export function Settings() {
     } finally {
       setPulling(null);
       refreshModels();
+    }
+  }
+
+  async function chooseVisionEngine(name: string) {
+    setVisionPulling(name);
+    setVisionPullProgress(null);
+    try {
+      await invoke("choose_vision_engine", { name });
+    } catch (e) {
+      alert(String(e));
+    } finally {
+      setVisionPulling(null);
+      refreshVisionEngines();
+    }
+  }
+
+  async function toggleScreenWatch() {
+    const next = !screenWatchEnabled;
+    setScreenWatchEnabled(next);
+    await invoke("set_screen_watch_enabled", { enabled: next });
+  }
+
+  async function updateScreenInterval(seconds: number) {
+    setScreenInterval(seconds);
+    if (seconds > 0) {
+      await invoke("set_screen_capture_interval", { seconds });
     }
   }
 
@@ -199,6 +255,87 @@ export function Settings() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div className="glass rounded-2xl p-6 space-y-4">
+        <label className="flex items-center justify-between cursor-pointer">
+          <div>
+            <h2 className="font-semibold text-foreground text-sm">Screen watching</h2>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Off by default. Reads what's on screen so sessions describe the actual work, not just
+              which app was open.
+            </p>
+          </div>
+          <input
+            type="checkbox"
+            checked={screenWatchEnabled}
+            onChange={toggleScreenWatch}
+            className="w-4 h-4 accent-primary shrink-0 ml-4"
+          />
+        </label>
+
+        {screenWatchEnabled && (
+          <div className="space-y-4 pt-2 border-t border-black/5">
+            <label className="block text-sm">
+              <span className="text-muted-foreground">Capture every</span>
+              <div className="flex items-center gap-2 mt-1">
+                <input
+                  type="number"
+                  min={10}
+                  step={10}
+                  value={screenInterval}
+                  onChange={(e) => updateScreenInterval(Number(e.target.value))}
+                  className="w-24 bg-white/60 border border-black/8 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/20"
+                />
+                <span className="text-sm text-muted-foreground">
+                  seconds (also captures immediately whenever you switch app/window)
+                </span>
+              </div>
+            </label>
+
+            <div className="space-y-2">
+              <p className="text-sm text-muted-foreground">Vision engine</p>
+              {visionEngines.map((v) => (
+                <button
+                  key={v.name}
+                  onClick={() => chooseVisionEngine(v.name)}
+                  disabled={visionPulling !== null}
+                  className={`w-full text-left rounded-xl px-4 py-3 border transition-colors ${
+                    v.selected ? "border-primary/40 bg-primary/5" : "border-black/8 bg-white/40 hover:bg-white/60"
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-foreground">{v.name}</span>
+                    <span className="text-xs text-muted-foreground">{v.size_human}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {v.description}
+                    {v.downloaded === false && !v.selected ? " · not downloaded" : ""}
+                  </p>
+                  {visionPulling === v.name && visionPullProgress && (
+                    <div className="mt-2">
+                      <div className="h-1.5 bg-black/5 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary transition-all"
+                          style={{
+                            width: visionPullProgress.total
+                              ? `${(100 * (visionPullProgress.completed ?? 0)) / visionPullProgress.total}%`
+                              : "5%",
+                          }}
+                        />
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">{visionPullProgress.status}</p>
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Changes take effect next time you restart the agent (Pause, then Start above).
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="glass rounded-2xl p-6 space-y-4">

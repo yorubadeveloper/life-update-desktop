@@ -3,6 +3,7 @@ mod models;
 mod ollama;
 mod ollama_process;
 mod settings;
+mod vision_models;
 
 use agent::{AgentProcess, AgentStatus};
 use models::MODEL_CHOICES;
@@ -12,6 +13,7 @@ use settings::LocalState;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager, State};
+use vision_models::{is_ollama_backed, VISION_CHOICES};
 
 #[derive(Serialize)]
 struct ModelInfo {
@@ -20,6 +22,12 @@ struct ModelInfo {
     description: String,
     selected: bool,
     downloaded: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ScreenWatchSettings {
+    enabled: bool,
+    interval_seconds: f64,
 }
 
 #[derive(Serialize)]
@@ -124,6 +132,73 @@ async fn choose_model(app: AppHandle, name: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn list_vision_engines() -> Result<Vec<ModelInfo>, String> {
+    let host = ollama_host();
+    let selected = settings::read_state().vision_engine;
+    let local_models = ollama::list_local_models(&host).await.ok();
+
+    Ok(VISION_CHOICES
+        .iter()
+        .map(|v| ModelInfo {
+            name: v.name.to_string(),
+            size_human: v.size_human.to_string(),
+            description: v.description.to_string(),
+            selected: v.name == selected,
+            downloaded: if !is_ollama_backed(v.name) {
+                Some(true)
+            } else {
+                local_models.as_ref().map(|set| set.contains(v.name))
+            },
+        })
+        .collect())
+}
+
+#[tauri::command]
+async fn choose_vision_engine(app: AppHandle, name: String) -> Result<(), String> {
+    if !VISION_CHOICES.iter().any(|v| v.name == name) {
+        return Err(format!("unknown vision engine {name}"));
+    }
+
+    if is_ollama_backed(&name) {
+        let host = ollama_host();
+        let already_local = ollama::list_local_models(&host).await.unwrap_or_default();
+        if !already_local.contains(&name) {
+            ollama::pull_model(&app, &host, &name).await?;
+        }
+    }
+
+    let mut state = settings::read_state();
+    state.vision_engine = name;
+    settings::write_state(&state)
+}
+
+#[tauri::command]
+fn get_screen_watch_settings() -> ScreenWatchSettings {
+    let state = settings::read_state();
+    ScreenWatchSettings {
+        enabled: state.screen_watch_enabled,
+        interval_seconds: state.screen_capture_interval_seconds,
+    }
+}
+
+#[tauri::command]
+fn set_screen_watch_enabled(enabled: bool) -> Result<(), String> {
+    let mut state = settings::read_state();
+    state.screen_watch_enabled = enabled;
+    settings::write_state(&state)
+}
+
+#[tauri::command]
+fn set_screen_capture_interval(seconds: f64) -> Result<(), String> {
+    if seconds <= 0.0 {
+        return Err("interval must be a positive number of seconds".to_string());
+    }
+    let mut state = settings::read_state();
+    state.screen_capture_interval_seconds = seconds;
+    settings::write_state(&state)
+}
+
+#[tauri::command]
 fn agent_status(app: AppHandle) -> Result<AgentStatus, String> {
     agent::fetch_status(&app)
 }
@@ -168,6 +243,11 @@ pub fn run() {
             remove_exclude_title_pattern,
             list_models,
             choose_model,
+            list_vision_engines,
+            choose_vision_engine,
+            get_screen_watch_settings,
+            set_screen_watch_enabled,
+            set_screen_capture_interval,
             agent_status,
             start_agent,
             stop_agent,

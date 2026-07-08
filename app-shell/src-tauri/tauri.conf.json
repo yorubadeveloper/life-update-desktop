@@ -33,7 +33,8 @@
     ],
     "resources": {
       "resources/life-update-agent": "life-update-agent",
-      "resources/ollama-runtime": "ollama-runtime"
+      "resources/ollama-runtime": "ollama-runtime",
+      "resources/tesseract-runtime": "tesseract-runtime"
     }
   }
 }

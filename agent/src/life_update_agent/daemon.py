@@ -10,13 +10,14 @@ import logging
 import threading
 
 from life_update_agent import db
-from life_update_agent.capture import file_watcher, idle_monitor, window_tracker
+from life_update_agent.capture import file_watcher, idle_monitor, screen_watcher, window_tracker
+from life_update_agent.capture.frame_queue import FrameQueue
 from life_update_agent.config import Settings
 
 logger = logging.getLogger(__name__)
 
 
-def run(settings: Settings, stop_event: threading.Event) -> list[threading.Thread]:
+def run(settings: Settings, stop_event: threading.Event, frame_queue: FrameQueue) -> list[threading.Thread]:
     db.init_db()
     idle_monitor.start()
 
@@ -30,6 +31,14 @@ def run(settings: Settings, stop_event: threading.Event) -> list[threading.Threa
             name="file-watcher", daemon=True,
         ),
     ]
+
+    if settings.screen_watch_enabled:
+        threads.append(threading.Thread(
+            target=screen_watcher.run,
+            args=(settings.exclude_list, settings.vision_engine, settings.screen_capture_interval_seconds, frame_queue, stop_event),
+            name="screen-watcher", daemon=True,
+        ))
+
     for t in threads:
         t.start()
         logger.info("started %s", t.name)

@@ -6,6 +6,7 @@ hands off to Layer 5 to push anything queued.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import threading
@@ -13,16 +14,24 @@ import uuid
 from datetime import datetime, timezone
 
 from life_update_agent import db
+from life_update_agent.capture.frame_queue import FrameQueue
 from life_update_agent.capture.idle_monitor import is_safe_to_run_inference
 from life_update_agent.config import Settings
 from life_update_agent.inference.cluster import sessionize
+from life_update_agent.inference.ollama_client import OllamaError, describe_image
 from life_update_agent.inference.summarize import summarize_session
+from life_update_agent.redaction.scanner import scan
 from life_update_agent.sync.queue import sync_pending
 
 logger = logging.getLogger(__name__)
 
 CHECK_INTERVAL_SECONDS = 60.0
 DEVICE_ID_NAMESPACE = uuid.UUID("6f7f9e2c-6c1a-4c2b-9a1e-3d6b6c2f9a11")
+
+VISION_DESCRIBE_PROMPT = (
+    "Describe what is being worked on in this screenshot in one or two plain "
+    "sentences. Focus on the task or problem, not the UI chrome."
+)
 
 
 def _fetch_unprocessed_events() -> list[dict]:
@@ -65,6 +74,37 @@ def _enqueue_portfolio_event(event: dict) -> None:
         )
 
 
+def _record_screen_text(ts: str, app_name: str | None, title: str | None, text: str) -> None:
+    with db.get_conn() as conn:
+        conn.execute(
+            "INSERT INTO raw_events (ts, kind, app_name, window_title, extra_json) VALUES (?, ?, ?, ?, ?)",
+            (ts, "screen_text", scan(app_name), scan(title), scan(text)),
+        )
+
+
+def process_pending_frames(settings: Settings, frame_queue: FrameQueue) -> int:
+    """Drains screenshots queued by screen_watcher.py for the vision-model
+    path (too slow to OCR inline - see screen_watcher.py). Each frame's
+    image is discarded immediately after the description comes back,
+    whether that succeeds or fails."""
+    frames = frame_queue.drain()
+    described = 0
+
+    for frame in frames:
+        try:
+            image_b64 = base64.b64encode(frame.png_bytes).decode()
+            description = describe_image(settings.ollama_host, settings.vision_engine, image_b64, VISION_DESCRIBE_PROMPT)
+        except OllamaError:
+            logger.warning("vision description failed for a queued frame, discarding", exc_info=True)
+            continue
+
+        if description:
+            _record_screen_text(frame.ts, frame.app_name, frame.title, description)
+            described += 1
+
+    return described
+
+
 def run_once(settings: Settings) -> int:
     """Runs a single inference pass. Returns the number of sessions processed.
 
@@ -104,9 +144,15 @@ def run_once(settings: Settings) -> int:
     return processed_count
 
 
-def run(settings: Settings, stop_event: threading.Event) -> None:
+def run(settings: Settings, stop_event: threading.Event, frame_queue: FrameQueue | None = None) -> None:
     while not stop_event.is_set():
         if is_safe_to_run_inference(settings.idle_threshold_minutes, settings.cpu_load_ceiling_percent):
+            if frame_queue is not None and len(frame_queue):
+                try:
+                    process_pending_frames(settings, frame_queue)
+                except Exception:
+                    logger.error("processing pending vision frames failed", exc_info=True)
+
             try:
                 count = run_once(settings)
                 if count:

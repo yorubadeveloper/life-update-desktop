@@ -18,7 +18,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS raw_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts TEXT NOT NULL,
-    kind TEXT NOT NULL,              -- 'window' | 'file' | 'git_commit'
+    kind TEXT NOT NULL,              -- 'window' | 'file' | 'git_commit' | 'screen_text'
     app_name TEXT,
     window_title TEXT,
     file_path TEXT,

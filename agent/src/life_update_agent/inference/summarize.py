@@ -45,6 +45,8 @@ def build_session_text(session: Sequence[Mapping[str, Any]]) -> str:
             entry = f"- edited file: {event.get('file_path') or ''}"
         elif event["kind"] == "git_commit":
             entry = f"- committed: {event.get('extra_json') or ''}"
+        elif event["kind"] == "screen_text":
+            entry = f"- on screen: {event.get('extra_json') or ''}".strip()
         else:
             continue
 

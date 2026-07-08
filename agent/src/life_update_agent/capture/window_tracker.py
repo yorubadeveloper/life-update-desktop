@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 POLL_INTERVAL_SECONDS = 2.0
 
 
-def _read_active_window() -> tuple[str | None, str | None]:
+def read_active_window() -> tuple[str | None, str | None]:
     """Returns (app_name, title), or (None, None) if unavailable (no window
     focused, or the OS denied permission - logged once, never raised)."""
     try:
@@ -49,7 +49,7 @@ def run(exclude_list: ExcludeList, stop_event) -> None:
     last_seen: tuple[str | None, str | None] | None = None
 
     while not stop_event.is_set():
-        app_name, title = _read_active_window()
+        app_name, title = read_active_window()
 
         if (app_name, title) != last_seen and (app_name or title):
             last_seen = (app_name, title)

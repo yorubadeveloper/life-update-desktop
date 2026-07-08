@@ -84,3 +84,20 @@ def generate_json(host: str, model: str, prompt: str, timeout: float = 60.0) -> 
         return json.loads(raw)
     except json.JSONDecodeError as e:
         raise OllamaError(f"ollama returned non-JSON response: {raw!r}") from e
+
+
+def describe_image(host: str, model: str, image_base64: str, prompt: str, timeout: float = 120.0) -> str:
+    """Free-text description from a vision-capable model. Slower than
+    generate_json (seconds, not milliseconds) - callers should never call
+    this inline in a real-time capture loop."""
+    try:
+        response = httpx.post(
+            f"{host.rstrip('/')}/api/generate",
+            json={"model": model, "prompt": prompt, "images": [image_base64], "stream": False},
+            timeout=timeout,
+        )
+        response.raise_for_status()
+    except httpx.HTTPError as e:
+        raise OllamaError(f"failed to reach ollama at {host}: {e}") from e
+
+    return response.json().get("response", "").strip()

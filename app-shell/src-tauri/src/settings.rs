@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::models::DEFAULT_MODEL;
+use crate::vision_models::DEFAULT_VISION_ENGINE;
 
 pub fn state_path() -> PathBuf {
     dirs::home_dir()
@@ -40,10 +41,24 @@ pub struct LocalState {
     pub title_patterns: Vec<String>,
     #[serde(default = "default_model_owned")]
     pub ollama_model: String,
+    #[serde(default)]
+    pub screen_watch_enabled: bool,
+    #[serde(default = "default_screen_capture_interval_seconds")]
+    pub screen_capture_interval_seconds: f64,
+    #[serde(default = "default_vision_engine_owned")]
+    pub vision_engine: String,
 }
 
 fn default_model_owned() -> String {
     DEFAULT_MODEL.to_string()
+}
+
+fn default_vision_engine_owned() -> String {
+    DEFAULT_VISION_ENGINE.to_string()
+}
+
+fn default_screen_capture_interval_seconds() -> f64 {
+    120.0
 }
 
 impl Default for LocalState {
@@ -52,6 +67,9 @@ impl Default for LocalState {
             apps: default_apps(),
             title_patterns: default_title_patterns(),
             ollama_model: DEFAULT_MODEL.to_string(),
+            screen_watch_enabled: false,
+            screen_capture_interval_seconds: default_screen_capture_interval_seconds(),
+            vision_engine: DEFAULT_VISION_ENGINE.to_string(),
         }
     }
 }

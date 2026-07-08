@@ -19,6 +19,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from life_update_agent.inference.models import DEFAULT_MODEL
+from life_update_agent.inference.vision_models import DEFAULT_VISION_ENGINE
 
 load_dotenv()
 
@@ -70,6 +71,9 @@ class Settings:
     cpu_load_ceiling_percent: float
     watch_dirs: list[str]
     presidio_spacy_model: str
+    screen_watch_enabled: bool
+    screen_capture_interval_seconds: float
+    vision_engine: str
     exclude_list: ExcludeList
 
 
@@ -104,6 +108,30 @@ def save_selected_model(name: str) -> None:
     _write_state({"ollama_model": name})
 
 
+def load_vision_engine() -> str:
+    return _read_state().get("vision_engine", DEFAULT_VISION_ENGINE)
+
+
+def save_vision_engine(name: str) -> None:
+    _write_state({"vision_engine": name})
+
+
+def load_screen_watch_enabled() -> bool:
+    return bool(_read_state().get("screen_watch_enabled", False))
+
+
+def save_screen_watch_enabled(enabled: bool) -> None:
+    _write_state({"screen_watch_enabled": enabled})
+
+
+def load_screen_capture_interval_seconds() -> float:
+    return float(_read_state().get("screen_capture_interval_seconds", 120))
+
+
+def save_screen_capture_interval_seconds(seconds: float) -> None:
+    _write_state({"screen_capture_interval_seconds": seconds})
+
+
 def load_settings() -> Settings:
     token = os.environ.get("LIFE_UPDATE_TOKEN", "")
     watch_dirs_raw = os.environ.get("WATCH_DIRS", "").strip()
@@ -117,5 +145,14 @@ def load_settings() -> Settings:
         cpu_load_ceiling_percent=float(os.environ.get("CPU_LOAD_CEILING_PERCENT", "30")),
         watch_dirs=watch_dirs,
         presidio_spacy_model=os.environ.get("PRESIDIO_SPACY_MODEL", "en_core_web_sm"),
+        screen_watch_enabled=(
+            os.environ.get("SCREEN_WATCH_ENABLED", "").lower() in ("1", "true")
+            if "SCREEN_WATCH_ENABLED" in os.environ
+            else load_screen_watch_enabled()
+        ),
+        screen_capture_interval_seconds=float(
+            os.environ.get("SCREEN_CAPTURE_INTERVAL_SECONDS") or load_screen_capture_interval_seconds()
+        ),
+        vision_engine=os.environ.get("VISION_ENGINE") or load_vision_engine(),
         exclude_list=load_exclude_list(),
     )

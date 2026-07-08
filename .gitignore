@@ -25,6 +25,7 @@ app-shell/src-tauri/gen/
 # Packaging build artifacts (fetched/built by scripts, not committed)
 agent/build/
 app-shell/src-tauri/ollama-runtime/
+app-shell/src-tauri/tesseract-runtime/
 app-shell/src-tauri/binaries/
 app-shell/src-tauri/resources/
 

@@ -12,7 +12,8 @@ what's captured, what's redacted, and what's sent, before you ever run it.
 
 ## What it does
 
-1. **Watches** your active window/app, file saves, and git commits.
+1. **Watches** your active window/app, file saves, git commits, and
+   (opt-in, off by default) what's actually on screen.
 2. **Redacts** anything sensitive, in three layers, before it's ever sent
    anywhere (see below).
 3. **Clusters** your activity into work sessions using a local LLM
@@ -104,6 +105,47 @@ uv run life-update-agent model list
 uv run life-update-agent model choose phi3:mini   # or qwen2.5:0.5b, llama3.2:1b, ...
 ```
 
+### Screen watching (optional, off by default)
+
+Window titles and file paths alone only tell you *which app* was open, not
+what was actually being worked on. Screen watching closes that gap: it
+periodically reads what's on screen (only the active window, not the full
+screen) and feeds the extracted text into the same session summary the
+agent already writes - so a session reads "debugging a memory leak in the
+queue implementation" instead of "used PyCharm".
+
+Capture is hybrid: on a timer (default every 120s), and immediately
+whenever you switch app/window, so context-switching never waits out a
+stale interval. The exclude-list gates this exactly like everything else -
+excluded apps are never screenshotted at all.
+
+Two engines to choose from:
+
+```bash
+uv run life-update-agent vision list
+uv run life-update-agent vision choose tesseract     # or qwen2.5vl:3b, qwen2.5vl:7b
+uv run life-update-agent screen enable
+uv run life-update-agent screen interval 120
+```
+
+| Engine | What it does | When it runs |
+|---|---|---|
+| `tesseract` (default) | Fast OCR, literal text only (~35 MB, no GPU) | Inline, in the capture loop - no lag |
+| `qwen2.5vl:3b` / `qwen2.5vl:7b` | A local vision model reads the screen semantically, not just its text | Deferred to the idle-gated worker (takes several seconds per frame - verified ~29s on this machine - so it can't run inline without stalling capture) |
+
+The vision-model path holds screenshots in a small **in-memory** queue
+(`capture/frame_queue.py`, capped at 20 frames, oldest dropped first) until
+the next idle window - never written to disk. This means vision-model
+descriptions lag behind capture during a long uninterrupted session;
+Tesseract does not have this lag, since it processes inline. Either way,
+raw images are discarded the moment text/description comes back, and that
+text goes through the exact same three-layer redaction as everything else
+before it ever touches storage.
+
+Screen Recording permission is requested the first time the agent tries to
+capture with it enabled (same graceful-degradation pattern as Accessibility
+- logs a warning and disables itself rather than crashing if denied).
+
 ### Run it
 
 ```bash
@@ -122,8 +164,9 @@ uv run life-update-agent exclude add --title-pattern '(?i)\bmedical\b'
 
 A [Tauri](https://tauri.app) app that wraps the Python daemon above with an
 actual UI: onboarding (paste your device token), a model picker with live
-pull progress, exclude-list management, a "launch at login" toggle, and a
-tray icon (pause/resume, quit).
+pull progress, exclude-list management, a "launch at login" toggle, a
+screen-watching toggle with its own vision-engine picker and capture
+frequency control, and a tray icon (pause/resume, quit).
 
 ```bash
 cd app-shell
@@ -135,16 +178,19 @@ npm run tauri dev
 ### Building the real installer
 
 The dev workflow above shells out to `uv run life-update-agent ...`. A real
-build instead bundles a frozen Python binary and the Ollama runtime as
-resources, so the `.app`/`.dmg` runs standalone - no `uv`/`python`/`ollama`
-required on the target machine:
+build instead bundles a frozen Python binary, the Ollama runtime, and
+Tesseract as resources, so the `.app`/`.dmg` runs standalone - no
+`uv`/`python`/`ollama`/`tesseract` required on the target machine:
 
 ```bash
 ../agent/build.sh                # freezes agent/ -> agent/dist/life-update-agent/ (PyInstaller)
 ./scripts/fetch-ollama.sh        # downloads Ollama's macOS runtime -> src-tauri/ollama-runtime/
-./scripts/prepare-resources.sh   # stages both into src-tauri/resources/ for bundling
+./scripts/bundle-tesseract.sh    # relocates local Homebrew tesseract -> src-tauri/tesseract-runtime/
+./scripts/prepare-resources.sh   # stages all three into src-tauri/resources/ for bundling
 npm run tauri build              # -> src-tauri/target/release/bundle/{macos,dmg}/
 ```
+
+`bundle-tesseract.sh` requires `brew install tesseract dylibbundler` locally.
 
 `agent.rs`/`ollama_process.rs` resolve the bundled resources at runtime if
 present and fall back to `uv run`/system `ollama` otherwise - the same dev
@@ -160,6 +206,20 @@ inference library (e.g. `llama-cpp-python`) would remove that, at the cost
 of reworking the model-pull UI around raw GGUF downloads instead of Ollama
 tags - not done, by choice, for now.
 
+Tesseract (the screen-watching feature's default OCR engine) is bundled
+too, the same resource-directory pattern as Ollama:
+`scripts/bundle-tesseract.sh` makes a local Homebrew-built binary
+relocatable via `dylibbundler` (unlike Ollama, there's no official
+prebuilt redistributable tarball for it) and stages it alongside
+`tessdata/eng.traineddata`. `capture/screen_watcher.py` resolves the
+bundled copy when running as a frozen build (falling back to a system
+install on PATH in dev) - verified by running the packaged app with
+`/usr/local/bin` stripped from PATH and confirming OCR still succeeded.
+The bundled binary and its dylib dependencies are ~13MB total; everything
+else it links against (`libcurl`, `Accelerate.framework`, `libc++`,
+`libSystem`) is a standard macOS system library already on every Mac, not
+something bundled.
+
 ## Status
 
 Layers 1-5 (capture, redaction, local storage, idle-gated inference, sync)
@@ -168,7 +228,10 @@ and Layer 7 (packaging) are done: `npm run tauri build` produces a working
 launch, show the correct name/icon in the Dock, and correctly reuse (not
 duplicate) an already-running system Ollama. Model weights are
 download-on-first-run rather than bundled, to keep the installer small.
-Voice/ASR is deferred to a later phase entirely.
+Screen watching (opt-in OCR/vision capture) is built and verified
+end-to-end, including a real vision-model call that correctly described
+actual on-screen work, and Tesseract is now bundled the same way Ollama is
+(see above). Voice/ASR is deferred to a later phase entirely.
 
 ## Contributing
 
