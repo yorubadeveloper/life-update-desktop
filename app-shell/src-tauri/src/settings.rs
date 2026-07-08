@@ -12,11 +12,14 @@ use std::path::{Path, PathBuf};
 use crate::models::DEFAULT_MODEL;
 use crate::vision_models::DEFAULT_VISION_ENGINE;
 
-pub fn state_path() -> PathBuf {
+pub fn state_dir() -> PathBuf {
     dirs::home_dir()
         .expect("home directory not found")
         .join(".life-update-agent")
-        .join("config.json")
+}
+
+pub fn state_path() -> PathBuf {
+    state_dir().join("config.json")
 }
 
 // Mirrors config.py's DEFAULT_EXCLUDE_LIST.
@@ -114,6 +117,7 @@ fn parse_env_file(path: &Path) -> (Vec<String>, BTreeMap<String, usize>) {
 }
 
 pub fn write_env_values(agent_dir: &Path, values: &[(&str, &str)]) -> Result<(), String> {
+    fs::create_dir_all(agent_dir).map_err(|e| e.to_string())?;
     let env_path = agent_dir.join(".env");
     let (mut lines, mut key_lines) = parse_env_file(&env_path);
 

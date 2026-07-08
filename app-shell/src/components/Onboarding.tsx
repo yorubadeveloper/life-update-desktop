@@ -1,11 +1,18 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { usePullProgress, type PullProgress } from "../hooks/usePullProgress";
+
+const API_URL = "https://life-update.com";
 
 export function Onboarding({ onConnected }: { onConnected: () => void }) {
   const [token, setToken] = useState("");
-  const [apiUrl, setApiUrl] = useState("https://life-update.com");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pullProgress, setPullProgress] = useState<PullProgress | null>(null);
+
+  usePullProgress((p) => {
+    if (saving) setPullProgress(p);
+  });
 
   async function handleConnect() {
     if (!token.trim()) {
@@ -14,8 +21,9 @@ export function Onboarding({ onConnected }: { onConnected: () => void }) {
     }
     setSaving(true);
     setError(null);
+    setPullProgress(null);
     try {
-      await invoke("save_token_settings", { token: token.trim(), apiUrl: apiUrl.trim() });
+      await invoke("save_token_settings", { token: token.trim(), apiUrl: API_URL });
       await invoke("start_agent");
       onConnected();
     } catch (e) {
@@ -23,6 +31,14 @@ export function Onboarding({ onConnected }: { onConnected: () => void }) {
     } finally {
       setSaving(false);
     }
+  }
+
+  function pullStatusText(p: PullProgress): string {
+    if (p.completed != null && p.total != null && p.total > 0) {
+      const pct = Math.round((p.completed / p.total) * 100);
+      return `${p.status} - ${pct}%`;
+    }
+    return p.status;
   }
 
   return (
@@ -35,28 +51,16 @@ export function Onboarding({ onConnected }: { onConnected: () => void }) {
           </p>
         </div>
 
-        <div className="space-y-3">
-          <label className="block text-sm">
-            <span className="text-muted-foreground">Device token</span>
-            <input
-              type="password"
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="paste your token here"
-              className="mt-1 w-full bg-white/60 border border-black/8 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40"
-            />
-          </label>
-
-          <label className="block text-sm">
-            <span className="text-muted-foreground">life-update.com URL</span>
-            <input
-              type="text"
-              value={apiUrl}
-              onChange={(e) => setApiUrl(e.target.value)}
-              className="mt-1 w-full bg-white/60 border border-black/8 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40"
-            />
-          </label>
-        </div>
+        <label className="block text-sm">
+          <span className="text-muted-foreground">Device token</span>
+          <input
+            type="password"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder="paste your token here"
+            className="mt-1 w-full bg-white/60 border border-black/8 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/40"
+          />
+        </label>
 
         {error && <p className="text-sm text-destructive">{error}</p>}
 
@@ -67,6 +71,14 @@ export function Onboarding({ onConnected }: { onConnected: () => void }) {
         >
           {saving ? "Connecting…" : "Connect"}
         </button>
+
+        {saving && (
+          <p className="text-xs text-muted-foreground text-center">
+            {pullProgress
+              ? pullStatusText(pullProgress)
+              : "Setting up - may download a local AI model (~2.2 GB) the first time, which can take a few minutes."}
+          </p>
+        )}
       </div>
     </div>
   );

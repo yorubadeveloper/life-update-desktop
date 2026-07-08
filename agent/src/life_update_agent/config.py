@@ -21,9 +21,15 @@ from dotenv import load_dotenv
 from life_update_agent.inference.models import DEFAULT_MODEL
 from life_update_agent.inference.vision_models import DEFAULT_VISION_ENGINE
 
-load_dotenv()
-
 STATE_DIR = Path(os.environ.get("LIFE_UPDATE_AGENT_HOME", Path.home() / ".life-update-agent"))
+
+# The Tauri app writes LIFE_UPDATE_TOKEN/LIFE_UPDATE_API_URL to a `.env` next
+# to config.json (not a source-tree path, which wouldn't exist in a real
+# install). Loaded first so it wins; the plain load_dotenv() below is the
+# dev fallback for `uv run life-update-agent` from a checkout with its own
+# agent/.env (see .env.example), and only fills in keys not already set.
+load_dotenv(STATE_DIR / ".env")
+load_dotenv()
 DB_PATH = STATE_DIR / "agent.db"
 STATE_PATH = STATE_DIR / "config.json"
 

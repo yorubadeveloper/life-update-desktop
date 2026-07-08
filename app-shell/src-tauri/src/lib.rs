@@ -37,7 +37,7 @@ struct TokenSettings {
 }
 
 fn ollama_host() -> String {
-    settings::read_env_values(&agent::agent_dir(), &["OLLAMA_HOST"])
+    settings::read_env_values(&settings::state_dir(), &["OLLAMA_HOST"])
         .get("OLLAMA_HOST")
         .cloned()
         .unwrap_or_else(|| "http://localhost:11434".to_string())
@@ -45,7 +45,7 @@ fn ollama_host() -> String {
 
 #[tauri::command]
 fn get_token_settings() -> TokenSettings {
-    let values = settings::read_env_values(&agent::agent_dir(), &["LIFE_UPDATE_TOKEN", "LIFE_UPDATE_API_URL"]);
+    let values = settings::read_env_values(&settings::state_dir(), &["LIFE_UPDATE_TOKEN", "LIFE_UPDATE_API_URL"]);
     TokenSettings {
         token: values.get("LIFE_UPDATE_TOKEN").cloned().unwrap_or_default(),
         api_url: values
@@ -58,7 +58,7 @@ fn get_token_settings() -> TokenSettings {
 #[tauri::command]
 fn save_token_settings(token: String, api_url: String) -> Result<(), String> {
     settings::write_env_values(
-        &agent::agent_dir(),
+        &settings::state_dir(),
         &[("LIFE_UPDATE_TOKEN", &token), ("LIFE_UPDATE_API_URL", &api_url)],
     )
 }
@@ -209,7 +209,19 @@ async fn start_agent(
     agent_state: State<'_, AgentProcess>,
     ollama_state: State<'_, OllamaProcess>,
 ) -> Result<(), String> {
-    ollama_process::ensure_server_running(&app, &ollama_host(), &ollama_state).await?;
+    let host = ollama_host();
+    ollama_process::ensure_server_running(&app, &host, &ollama_state).await?;
+
+    // Pull the selected model here (with progress events the frontend
+    // already listens for via the model picker) rather than leaving it to
+    // the agent's own first-run check - that happens silently in the
+    // spawned child process with no way to surface progress to the UI.
+    let model = settings::read_state().ollama_model;
+    let already_local = ollama::list_local_models(&host).await.unwrap_or_default();
+    if !already_local.contains(&model) {
+        ollama::pull_model(&app, &host, &model).await?;
+    }
+
     agent::start(&app, &agent_state)
 }
 
@@ -270,7 +282,7 @@ pub fn run() {
             // before onboarding writes LIFE_UPDATE_TOKEN to .env, and since
             // start_agent() is a no-op once already running, the token
             // would never get picked up until the user manually restarted it.
-            let already_configured = settings::read_env_values(&agent::agent_dir(), &["LIFE_UPDATE_TOKEN"])
+            let already_configured = settings::read_env_values(&settings::state_dir(), &["LIFE_UPDATE_TOKEN"])
                 .get("LIFE_UPDATE_TOKEN")
                 .is_some_and(|t| !t.is_empty());
             if already_configured {
