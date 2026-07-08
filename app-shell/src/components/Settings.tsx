@@ -40,18 +40,32 @@ export function Settings() {
   const [visionPullProgress, setVisionPullProgress] = useState<PullProgress | null>(null);
   const [screenWatchEnabled, setScreenWatchEnabled] = useState(false);
   const [screenInterval, setScreenInterval] = useState(120);
+  const [autostartError, setAutostartError] = useState<string | null>(null);
 
   useEffect(() => {
     isAutostartEnabled().then(setAutostart).catch(() => {});
   }, []);
 
   async function toggleAutostart() {
-    if (autostart) {
-      await disableAutostart();
-    } else {
-      await enableAutostart();
+    setAutostartError(null);
+    try {
+      if (autostart) {
+        await disableAutostart();
+      } else {
+        const inApplications = await invoke<boolean>("is_running_from_applications");
+        if (!inApplications) {
+          setAutostartError(
+            "Move Life-Update to your Applications folder first - launch at login won't survive the app running from a mounted disk image."
+          );
+          return;
+        }
+        await enableAutostart();
+      }
+      setAutostart(await isAutostartEnabled());
+    } catch (e) {
+      setAutostartError(String(e));
+      setAutostart(await isAutostartEnabled().catch(() => false));
     }
-    setAutostart(await isAutostartEnabled());
   }
 
   const refreshModels = useCallback(() => {
@@ -187,7 +201,7 @@ export function Settings() {
     <div className="max-w-2xl mx-auto px-4 py-10 space-y-8">
       <div className="glass rounded-2xl p-6 flex items-center justify-between">
         <div>
-          <h1 className="text-lg font-semibold text-foreground">life-update</h1>
+          <h1 className="text-lg font-semibold text-foreground">Life-Update</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             {running ? "Running - watching your activity" : "Paused"}
           </p>
@@ -201,23 +215,28 @@ export function Settings() {
         </button>
       </div>
 
-      <label className="glass rounded-2xl p-4 flex items-center justify-between cursor-pointer">
-        <div>
-          <p className="text-sm font-medium text-foreground">Launch at login</p>
-          <p className="text-xs text-muted-foreground mt-0.5">Start automatically when you sign in</p>
-        </div>
-        <input
-          type="checkbox"
-          checked={autostart}
-          onChange={toggleAutostart}
-          className="w-4 h-4 accent-primary"
-        />
-      </label>
+      <div className="glass rounded-2xl p-4 space-y-2">
+        <label className="flex items-center justify-between cursor-pointer">
+          <div>
+            <p className="text-sm font-medium text-foreground">Launch at login</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Start automatically when you sign in</p>
+          </div>
+          <input
+            type="checkbox"
+            checked={autostart}
+            onChange={toggleAutostart}
+            className="w-4 h-4 accent-primary"
+          />
+        </label>
+        {autostartError && <p className="text-xs text-destructive">{autostartError}</p>}
+      </div>
 
       <div className="glass rounded-2xl p-6 space-y-4">
         <h2 className="font-semibold text-foreground text-sm">Local model</h2>
         <p className="text-sm text-muted-foreground">
-          Used to cluster your activity into sessions, entirely on this machine.
+          Used to cluster your activity into sessions, entirely on this machine. Downloaded and
+          run via Ollama, stored in Ollama's own data folder - uninstalling Life-Update does not
+          remove it. Manage or delete downloaded models from the Ollama app directly.
         </p>
         <div className="space-y-2">
           {models.map((m) => (

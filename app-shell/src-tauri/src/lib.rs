@@ -199,8 +199,8 @@ fn set_screen_capture_interval(seconds: f64) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn agent_status(app: AppHandle) -> Result<AgentStatus, String> {
-    agent::fetch_status(&app)
+fn agent_status() -> Result<AgentStatus, String> {
+    agent::fetch_status()
 }
 
 #[tauri::command]
@@ -212,17 +212,35 @@ async fn start_agent(
     let host = ollama_host();
     ollama_process::ensure_server_running(&app, &host, &ollama_state).await?;
 
-    // Pull the selected model here (with progress events the frontend
-    // already listens for via the model picker) rather than leaving it to
-    // the agent's own first-run check - that happens silently in the
-    // spawned child process with no way to surface progress to the UI.
+    // Never pull a multi-GB model from here without the user having
+    // explicitly chosen to - onboarding walks them through picking one
+    // (with visible progress) before this is ever called for the first
+    // time, and `choose_model` is the only other path that pulls, also
+    // with explicit consent. If nothing is downloaded yet, fail loudly
+    // instead of silently starting a large background download.
     let model = settings::read_state().ollama_model;
     let already_local = ollama::list_local_models(&host).await.unwrap_or_default();
     if !already_local.contains(&model) {
-        ollama::pull_model(&app, &host, &model).await?;
+        return Err(format!(
+            "{model} is not downloaded yet - choose a model in Settings first"
+        ));
     }
 
     agent::start(&app, &agent_state)
+}
+
+/// "Launch at login" registers a launchd plist pointing at the app's
+/// *current* path. If the app isn't in /Applications - still running from
+/// a mounted DMG or a Gatekeeper-translocated read-only copy - that path
+/// stops existing the moment the DMG is ejected, and the plist silently
+/// points at nothing. This is checked before enabling so the UI can warn
+/// instead of registering something that looks like it worked but won't
+/// actually run at next login.
+#[tauri::command]
+fn is_running_from_applications() -> bool {
+    std::env::current_exe()
+        .map(|p| p.starts_with("/Applications"))
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -263,6 +281,7 @@ pub fn run() {
             agent_status,
             start_agent,
             stop_agent,
+            is_running_from_applications,
             is_agent_running,
         ])
         .setup(|app| {

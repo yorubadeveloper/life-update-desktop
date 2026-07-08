@@ -89,7 +89,7 @@ pub fn is_running(state: &AgentProcess) -> bool {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct AgentStatus {
     pub unprocessed_raw_events: i64,
     pub total_captured_events: i64,
@@ -98,14 +98,64 @@ pub struct AgentStatus {
     pub last_sync_at: Option<String>,
 }
 
-pub fn fetch_status(app: &AppHandle) -> Result<AgentStatus, String> {
-    let output = agent_command(app, &["status", "--json"])
-        .output()
-        .map_err(|e| format!("failed to run status check: {e}"))?;
-
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).to_string());
+/// Reads the same counts as `life-update-agent status --json` directly out
+/// of the SQLite file (mirrors db.py's schema), instead of spawning the
+/// full frozen Python process for a handful of COUNT queries. This is
+/// polled every few seconds by the Settings UI - spawning the PyInstaller
+/// binary (which imports the whole spacy/presidio/thinc ML stack on every
+/// invocation regardless of which subcommand is used) on that cadence was
+/// the actual cause of the app feeling sluggish and using far more memory
+/// than the idle case should.
+pub fn fetch_status() -> Result<AgentStatus, String> {
+    let db_path = crate::settings::state_dir().join("agent.db");
+    if !db_path.exists() {
+        // Nothing captured yet (agent has never run) - not an error.
+        return Ok(AgentStatus::default());
     }
 
-    serde_json::from_slice(&output.stdout).map_err(|e| e.to_string())
+    let conn = rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let unprocessed_raw_events: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM raw_events WHERE processed_at IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let total_captured_events: i64 = conn
+        .query_row("SELECT COUNT(*) FROM raw_events", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    let unsent_portfolio_events: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM portfolio_event_queue WHERE sent_at IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let total_synced_portfolio_events: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM portfolio_event_queue WHERE sent_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let last_sync_at: Option<String> = conn
+        .query_row(
+            "SELECT MAX(sent_at) FROM portfolio_event_queue",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    Ok(AgentStatus {
+        unprocessed_raw_events,
+        total_captured_events,
+        unsent_portfolio_events,
+        total_synced_portfolio_events,
+        last_sync_at,
+    })
 }

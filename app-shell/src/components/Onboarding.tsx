@@ -4,14 +4,26 @@ import { usePullProgress, type PullProgress } from "../hooks/usePullProgress";
 
 const API_URL = "https://life-update.com";
 
+interface ModelInfo {
+  name: string;
+  size_human: string;
+  description: string;
+  selected: boolean;
+  downloaded: boolean | null;
+}
+
 export function Onboarding({ onConnected }: { onConnected: () => void }) {
+  const [step, setStep] = useState<"token" | "model">("token");
   const [token, setToken] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [pulling, setPulling] = useState<string | null>(null);
   const [pullProgress, setPullProgress] = useState<PullProgress | null>(null);
 
   usePullProgress((p) => {
-    if (saving) setPullProgress(p);
+    if (pulling) setPullProgress(p);
   });
 
   async function handleConnect() {
@@ -21,15 +33,31 @@ export function Onboarding({ onConnected }: { onConnected: () => void }) {
     }
     setSaving(true);
     setError(null);
-    setPullProgress(null);
     try {
       await invoke("save_token_settings", { token: token.trim(), apiUrl: API_URL });
+      const list = await invoke<ModelInfo[]>("list_models");
+      setModels(list);
+      setStep("model");
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleChooseModel(name: string) {
+    setPulling(name);
+    setPullProgress(null);
+    setError(null);
+    try {
+      await invoke("choose_model", { name });
       await invoke("start_agent");
       onConnected();
     } catch (e) {
       setError(String(e));
     } finally {
-      setSaving(false);
+      setPulling(null);
+      setPullProgress(null);
     }
   }
 
@@ -39,6 +67,61 @@ export function Onboarding({ onConnected }: { onConnected: () => void }) {
       return `${p.status} - ${pct}%`;
     }
     return p.status;
+  }
+
+  if (step === "model") {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-8">
+        <div className="glass rounded-2xl p-8 max-w-md w-full space-y-5">
+          <div>
+            <h1 className="text-xl font-semibold text-foreground">Choose a local model</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Runs entirely on this machine to summarize your activity into sessions. Nothing
+              downloads until you pick one below.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            {models.map((m) => (
+              <button
+                key={m.name}
+                onClick={() => handleChooseModel(m.name)}
+                disabled={pulling !== null}
+                className={`w-full text-left rounded-xl px-4 py-3 border transition-colors ${
+                  m.selected ? "border-primary/40 bg-primary/5" : "border-black/8 bg-white/40 hover:bg-white/60"
+                } disabled:opacity-50`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-foreground">{m.name}</span>
+                  <span className="text-xs text-muted-foreground">{m.size_human}</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">{m.description}</p>
+                {pulling === m.name && (
+                  <div className="mt-2">
+                    <div className="h-1.5 bg-black/5 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary transition-all"
+                        style={{
+                          width:
+                            pullProgress?.total
+                              ? `${(100 * (pullProgress.completed ?? 0)) / pullProgress.total}%`
+                              : "5%",
+                        }}
+                      />
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {pullProgress ? pullStatusText(pullProgress) : "Starting download…"}
+                    </p>
+                  </div>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {error && <p className="text-sm text-destructive">{error}</p>}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -71,14 +154,6 @@ export function Onboarding({ onConnected }: { onConnected: () => void }) {
         >
           {saving ? "Connecting…" : "Connect"}
         </button>
-
-        {saving && (
-          <p className="text-xs text-muted-foreground text-center">
-            {pullProgress
-              ? pullStatusText(pullProgress)
-              : "Setting up - may download a local AI model (~2.2 GB) the first time, which can take a few minutes."}
-          </p>
-        )}
       </div>
     </div>
   );
