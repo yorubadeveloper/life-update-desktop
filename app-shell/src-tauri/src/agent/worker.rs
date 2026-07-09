@@ -3,7 +3,7 @@
 //! the selected engine, queues the results, and syncs anything unsent.
 
 use super::frame_queue::FrameQueue;
-use super::summarize::{summarize_session, SummaryEngine};
+use super::summarize::{summarize_session, RelatedSession, SummaryEngine};
 use super::{apple_ai, cluster, db, idle, redaction::scan, sync, AgentConfig};
 use base64::Engine as _;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,7 +35,7 @@ fn describe_image_ollama(host: &str, model: &str, png: &[u8]) -> Result<String, 
     Ok(body.get("response").and_then(|v| v.as_str()).unwrap_or("").trim().to_string())
 }
 
-fn process_pending_frames(cfg: &AgentConfig, frames: &FrameQueue) {
+pub fn process_pending_frames(cfg: &AgentConfig, frames: &FrameQueue) {
     for frame in frames.drain() {
         match describe_image_ollama(&cfg.ollama_host, &cfg.vision_engine, &frame.png_bytes) {
             Ok(description) if !description.is_empty() => {
@@ -77,9 +77,17 @@ pub fn run_once(cfg: &AgentConfig) -> usize {
         SummaryEngine::Ollama { host: &cfg.ollama_host, model: &cfg.model }
     };
 
+    // Memory: this user's most recent summarized sessions, so the model
+    // can keep project names stable and describe continuation.
+    let related: Vec<RelatedSession> = super::recent_sessions(5)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| RelatedSession { project: s.project, summary: s.summary, ended_at: s.ended_at })
+        .collect();
+
     let mut processed = 0;
     for session in &sessions {
-        match summarize_session(session, &engine) {
+        match summarize_session(session, &engine, &related) {
             Some(draft) => {
                 sync::enqueue(&cfg.db_path, &draft);
                 let ids: Vec<i64> = session.iter().map(|e| e.id).collect();

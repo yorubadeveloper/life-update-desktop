@@ -25,8 +25,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 
-/// Some(stop_flag) while the capture threads are running.
-pub struct AgentProcess(pub Mutex<Option<Arc<AtomicBool>>>);
+pub struct Running {
+    stop: Arc<AtomicBool>,
+    cfg: Arc<AgentConfig>,
+    frames: Arc<frame_queue::FrameQueue>,
+}
+
+/// Some(Running) while the capture threads are up.
+pub struct AgentProcess(pub Mutex<Option<Running>>);
 
 pub struct AgentConfig {
     pub db_path: PathBuf,
@@ -149,8 +155,8 @@ fn load_config(app: &AppHandle) -> AgentConfig {
 
 pub fn start(app: &AppHandle, state: &AgentProcess) -> Result<(), String> {
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    if let Some(stop) = guard.as_ref() {
-        if !stop.load(Ordering::Relaxed) {
+    if let Some(running) = guard.as_ref() {
+        if !running.stop.load(Ordering::Relaxed) {
             return Ok(()); // already running
         }
     }
@@ -183,21 +189,43 @@ pub fn start(app: &AppHandle, state: &AgentProcess) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     {
-        let (cfg, frames, stop) = (cfg, frames, stop.clone());
+        let (cfg, frames, stop) = (cfg.clone(), frames.clone(), stop.clone());
         std::thread::Builder::new()
             .name("inference-worker".into())
             .spawn(move || worker::run(cfg, frames, stop))
             .map_err(|e| e.to_string())?;
     }
 
-    *guard = Some(stop);
+    *guard = Some(Running { stop, cfg, frames });
     Ok(())
+}
+
+/// The config/frames of the running agent, for on-demand operations.
+pub fn running_parts(state: &AgentProcess) -> Option<(Arc<AgentConfig>, Arc<frame_queue::FrameQueue>)> {
+    let guard = state.0.lock().ok()?;
+    let running = guard.as_ref()?;
+    if running.stop.load(Ordering::Relaxed) {
+        return None;
+    }
+    Some((running.cfg.clone(), running.frames.clone()))
+}
+
+/// "Summarize now": one immediate inference + sync pass, skipping the idle
+/// gate entirely - the user asked for it, so it runs. Returns sessions
+/// processed.
+pub fn summarize_now_blocking(cfg: &AgentConfig, frames: &frame_queue::FrameQueue) -> usize {
+    if frames.len() > 0 && crate::vision_models::is_ollama_backed(&cfg.vision_engine) {
+        worker::process_pending_frames(cfg, frames);
+    }
+    let n = worker::run_once(cfg);
+    sync::sync_pending(&cfg.db_path, &cfg.api_url, &cfg.token);
+    n
 }
 
 pub fn stop(state: &AgentProcess) -> Result<(), String> {
     let mut guard = state.0.lock().map_err(|e| e.to_string())?;
-    if let Some(stop) = guard.take() {
-        stop.store(true, Ordering::Relaxed);
+    if let Some(running) = guard.take() {
+        running.stop.store(true, Ordering::Relaxed);
     }
     Ok(())
 }
@@ -207,7 +235,7 @@ pub fn is_running(state: &AgentProcess) -> bool {
         .0
         .lock()
         .ok()
-        .and_then(|g| g.as_ref().map(|s| !s.load(Ordering::Relaxed)))
+        .and_then(|g| g.as_ref().map(|r| !r.stop.load(Ordering::Relaxed)))
         .unwrap_or(false)
 }
 

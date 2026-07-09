@@ -10,6 +10,7 @@ import {
   FileText,
   GitCommit,
   Monitor,
+  Sparkle,
 } from "@phosphor-icons/react";
 
 interface AgentStatus {
@@ -52,6 +53,17 @@ const CATEGORY_LABELS: Record<string, string> = {
   admin: "Admin",
   personal: "Personal",
   other: "Other",
+};
+
+const CATEGORY_STYLES: Record<string, string> = {
+  deep_work: "bg-primary/10 text-primary",
+  learning: "bg-sky-500/10 text-sky-700",
+  creative: "bg-purple-500/10 text-purple-700",
+  meeting: "bg-teal-500/10 text-teal-700",
+  admin: "bg-stone-500/10 text-stone-600",
+  maintenance: "bg-stone-500/10 text-stone-600",
+  personal: "bg-amber-500/10 text-amber-700",
+  other: "bg-black/5 text-muted-foreground",
 };
 
 const KIND_ICONS: Record<string, typeof AppWindow> = {
@@ -115,7 +127,7 @@ function SessionCard({ session }: { session: SessionView }) {
         </div>
         <p className="text-sm text-muted-foreground">{session.summary}</p>
         <div className="flex items-center gap-2 pt-0.5">
-          <span className="text-[11px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+          <span className={`text-[11px] px-2 py-0.5 rounded-full ${CATEGORY_STYLES[session.category] ?? CATEGORY_STYLES.other}`}>
             {CATEGORY_LABELS[session.category] ?? session.category}
           </span>
           <span className="text-[11px] text-muted-foreground">
@@ -162,6 +174,8 @@ export function Home() {
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [sessions, setSessions] = useState<SessionView[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [summarizing, setSummarizing] = useState(false);
+  const [summarizeResult, setSummarizeResult] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     invoke<boolean>("is_agent_running").then(setRunning).catch(() => {});
@@ -174,6 +188,26 @@ export function Home() {
     const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, [refresh]);
+
+  async function summarizeNow() {
+    setSummarizing(true);
+    setError(null);
+    setSummarizeResult(null);
+    try {
+      const n = await invoke<number>("summarize_now");
+      setSummarizeResult(
+        n === 0
+          ? "Nothing summarizable yet - sessions need at least a minute of activity."
+          : `Summarized ${n} session${n === 1 ? "" : "s"} and synced.`
+      );
+      setTimeout(() => setSummarizeResult(null), 6000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSummarizing(false);
+      refresh();
+    }
+  }
 
   async function toggleAgent() {
     setError(null);
@@ -230,6 +264,20 @@ export function Home() {
               {status.unsent_portfolio_events > 0 && ` · ${status.unsent_portfolio_events} pending`}
             </p>
           </div>
+        </div>
+      )}
+
+      {running && status && status.unprocessed_raw_events > 0 && (
+        <div className="flex items-center gap-3">
+          <button
+            onClick={summarizeNow}
+            disabled={summarizing}
+            className="flex items-center gap-2 border border-primary/30 text-primary rounded-xl px-4 py-2 text-sm font-medium hover:bg-primary/5 transition-colors disabled:opacity-60"
+          >
+            <Sparkle size={14} weight="bold" className={summarizing ? "animate-pulse" : ""} />
+            {summarizing ? "Summarizing on-device…" : "Summarize now"}
+          </button>
+          {summarizeResult && <p className="text-xs text-muted-foreground">{summarizeResult}</p>}
         </div>
       )}
 

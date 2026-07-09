@@ -23,15 +23,93 @@ name from these instructions into your output):
 - Window titles usually contain the real project, file, or document name. Take the project name from there, never from a tool or app name.
 - Never output a placeholder or invented name. If no project name is visible in the log, use a short plain description of the activity as the project instead.
 - Never include personal names, email addresses, usernames, or any other personally identifying details in your output - describe the work, not the people.
+- The input may contain a [RECENT SESSIONS] section (previous summarized sessions). Summarize ONLY the [CURRENT SESSION LOG]; if it continues a recent session, reuse that session's exact project name and reflect the continuation.
+- Recent sessions may contain mistakes. Never copy their wording or claims - reuse only a project name, and never a tool/app name even if a recent session used one.
 
-Activity log:
-{activity}
+{document}
 
 JSON:"#;
 
 pub enum SummaryEngine<'a> {
     Apple { helper: &'a Path },
     Ollama { host: &'a str, model: &'a str },
+}
+
+/// A previously summarized session, injected as memory so the model can
+/// produce continuity ("returned to...", "continuing...") and reuse stable
+/// project names instead of re-inventing one per session.
+pub struct RelatedSession {
+    pub project: String,
+    pub summary: String,
+    pub ended_at: String,
+}
+
+fn humanize_age(ended_at: &str) -> String {
+    let Some(then) = parse_ts(ended_at) else { return "earlier".into() };
+    let mins = (chrono::Utc::now().timestamp() - then.timestamp()) / 60;
+    match mins {
+        m if m < 60 => format!("{m}m ago"),
+        m if m < 60 * 24 => format!("{}h ago", m / 60),
+        m => format!("{}d ago", m / (60 * 24)),
+    }
+}
+
+/// The document handed to the model: optional recent-session memory, then
+/// the current log. Both engines consume the same shape.
+pub fn build_prompt_document(related: &[RelatedSession], activity: &str) -> String {
+    let mut doc = String::new();
+    if !related.is_empty() {
+        doc.push_str("[RECENT SESSIONS]\n");
+        for r in related.iter().take(5) {
+            doc.push_str(&format!(
+                "- {} · {}: {}\n",
+                humanize_age(&r.ended_at),
+                r.project,
+                r.summary
+            ));
+        }
+        doc.push('\n');
+    }
+    doc.push_str("[CURRENT SESSION LOG]\n");
+    doc.push_str(activity);
+    doc
+}
+
+// The on-device model's context window is small (~4k tokens combined). A
+// long session with screen watching on can exceed it, which would silently
+// truncate the log. Map-reduce instead: condense chunks, then summarize.
+const MAX_ACTIVITY_CHARS: usize = 6000;
+const CHUNK_CHARS: usize = 4000;
+
+fn condense_if_needed(activity: String, engine: &SummaryEngine) -> String {
+    let SummaryEngine::Apple { helper } = engine else { return activity };
+    if activity.len() <= MAX_ACTIVITY_CHARS {
+        return activity;
+    }
+
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for line in activity.lines() {
+        if current.len() + line.len() + 1 > CHUNK_CHARS && !current.is_empty() {
+            chunks.push(std::mem::take(&mut current));
+        }
+        current.push_str(line);
+        current.push('\n');
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+
+    let condensed: Vec<String> = chunks
+        .into_iter()
+        .map(|c| super::apple_ai::condense(helper, &c).unwrap_or(c))
+        .collect();
+    let joined = condensed.join("\n");
+    if joined.len() > MAX_ACTIVITY_CHARS {
+        joined.chars().take(MAX_ACTIVITY_CHARS).collect()
+    } else {
+        joined
+    }
 }
 
 pub struct PortfolioEventDraft {
@@ -126,14 +204,20 @@ fn ollama_generate_json(host: &str, model: &str, prompt: &str) -> Result<serde_j
 /// Returns None if the session couldn't be summarized (engine unavailable
 /// or bad output) - caller should leave the raw events unprocessed and
 /// retry next cycle.
-pub fn summarize_session(session: &[RawEvent], engine: &SummaryEngine) -> Option<PortfolioEventDraft> {
+pub fn summarize_session(
+    session: &[RawEvent],
+    engine: &SummaryEngine,
+    related: &[RelatedSession],
+) -> Option<PortfolioEventDraft> {
     let activity = build_session_text(session);
     if activity.is_empty() {
         return None;
     }
+    let activity = condense_if_needed(activity, engine);
+    let document = build_prompt_document(related, &activity);
 
     let (project, category, summary) = match engine {
-        SummaryEngine::Apple { helper } => match apple_ai::summarize(helper, &activity) {
+        SummaryEngine::Apple { helper } => match apple_ai::summarize(helper, &document) {
             Ok(s) => (s.project, s.category, s.summary),
             Err(e) => {
                 log::warn!("apple intelligence summarization failed: {e}");
@@ -141,7 +225,7 @@ pub fn summarize_session(session: &[RawEvent], engine: &SummaryEngine) -> Option
             }
         },
         SummaryEngine::Ollama { host, model } => {
-            match ollama_generate_json(host, model, &OLLAMA_PROMPT_TEMPLATE.replace("{activity}", &activity)) {
+            match ollama_generate_json(host, model, &OLLAMA_PROMPT_TEMPLATE.replace("{document}", &document)) {
                 Ok(v) => (
                     v.get("project").and_then(|x| x.as_str()).unwrap_or("").to_string(),
                     v.get("category").and_then(|x| x.as_str()).unwrap_or("").to_string(),

@@ -1,0 +1,38 @@
+{
+  "01-project-in-titles": {
+    "categories": [
+      "deep_work"
+    ],
+    "project_matches": "acorntracker",
+    "project_rejects": "myapp|warp|pycharm|chrome"
+  },
+  "02-no-project-anywhere": {
+    "categories": [
+      "learning",
+      "personal"
+    ],
+    "project_matches": "flight|travel|research",
+    "project_rejects": "myapp|chrome|untitled"
+  },
+  "03-design": {
+    "categories": [
+      "creative"
+    ],
+    "project_matches": "brand refresh",
+    "project_rejects": "figma|myapp"
+  },
+  "04-admin": {
+    "categories": [
+      "admin"
+    ],
+    "project_matches": ".",
+    "project_rejects": "myapp|^mail$|^notion$|^google calendar$"
+  },
+  "05-continuity": {
+    "categories": [
+      "deep_work"
+    ],
+    "project_matches": "acorntracker",
+    "project_rejects": "myapp|warp|pycharm"
+  }
+}

@@ -44,7 +44,50 @@ pub fn availability(helper: &Path) -> Result<(), String> {
     }
 }
 
-/// Summarize a redacted activity log into {project, category, summary}.
+/// Condense an over-long log fragment into a few bullet lines (map-reduce
+/// step for sessions that would blow past the model's context window).
+pub fn condense(helper: &Path, fragment: &str) -> Result<String, String> {
+    let out = run_with_stdin(helper, "condense", fragment)?;
+    Ok(String::from_utf8_lossy(&out).trim().to_string())
+}
+
+fn run_with_stdin(helper: &Path, command: &str, input: &str) -> Result<Vec<u8>, String> {
+    let mut child = Command::new(helper)
+        .arg(command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("failed to launch AI helper: {e}"))?;
+
+    child
+        .stdin
+        .take()
+        .ok_or("no stdin")?
+        .write_all(input.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    let deadline = Instant::now() + Duration::from_secs(180);
+    loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(_) => break,
+            None if Instant::now() > deadline => {
+                let _ = child.kill();
+                return Err("AI helper timed out".to_string());
+            }
+            None => std::thread::sleep(Duration::from_millis(200)),
+        }
+    }
+
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(out.stdout)
+}
+
+/// Summarize a redacted activity document (recent-session memory + current
+/// log) into {project, category, summary}.
 pub fn summarize(helper: &Path, activity: &str) -> Result<AiSummary, String> {
     let mut child = Command::new(helper)
         .arg("summarize")

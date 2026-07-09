@@ -1,0 +1,7 @@
+[RECENT SESSIONS]
+- 2h ago · AcornTracker: Debugged a TypeError in the JobCard component and researched React fixes.
+
+[CURRENT SESSION LOG]
+- worked in PyCharm: AcornTracker - src/components/JobCard.tsx
+- committed: fix undefined props crash in JobCard
+- worked in Warp: npm test - AcornTracker

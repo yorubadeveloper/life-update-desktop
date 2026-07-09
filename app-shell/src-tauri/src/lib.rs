@@ -341,6 +341,18 @@ fn is_agent_running(state: State<AgentProcess>) -> bool {
     agent::is_running(&state)
 }
 
+/// One immediate summarize+sync pass, skipping the idle gate - for the
+/// Home-screen "Summarize now" button. Heavy (on-device inference), so it
+/// runs on a blocking thread. Returns sessions processed.
+#[tauri::command]
+async fn summarize_now(state: State<'_, AgentProcess>) -> Result<usize, String> {
+    let (cfg, frames) =
+        agent::running_parts(&state).ok_or("Start the agent first, then summarize.")?;
+    tauri::async_runtime::spawn_blocking(move || agent::summarize_now_blocking(&cfg, &frames))
+        .await
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn restart_app(app: AppHandle) {
     app.restart();
@@ -438,6 +450,7 @@ pub fn run() {
             recent_events,
             recent_sessions,
             session_events,
+            summarize_now,
             start_agent,
             stop_agent,
             is_running_from_applications,

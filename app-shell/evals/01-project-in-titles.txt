@@ -1,0 +1,4 @@
+[CURRENT SESSION LOG]
+- worked in Warp: npm run dev - AcornTracker
+- worked in PyCharm: AcornTracker - src/components/JobCard.tsx
+- worked in Google Chrome: TypeError cannot read properties of undefined react - Stack Overflow
