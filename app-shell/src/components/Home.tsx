@@ -47,6 +47,10 @@ const CATEGORY_LABELS: Record<string, string> = {
   deep_work: "Deep work",
   maintenance: "Maintenance",
   meeting: "Meeting",
+  learning: "Learning",
+  creative: "Creative",
+  admin: "Admin",
+  personal: "Personal",
   other: "Other",
 };
 

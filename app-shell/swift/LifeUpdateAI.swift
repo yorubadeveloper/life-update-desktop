@@ -35,6 +35,15 @@ Rules:
 - Never output a placeholder or invented name. If no project name is visible in the log, use a short plain description of the activity as the project instead.
 - The summary describes what was concretely done (debugging an error, editing specific files, researching a problem), based only on the log. If intent is unclear, describe the visible activity plainly rather than inventing a goal.
 - Never include personal names, email addresses, usernames, or other personally identifying details. Describe the work, not the people.
+
+Categories (sessions are anyone's time, not just programming):
+- deep_work: focused building, coding, or substantial creation
+- learning: research, reading, studying, following a course
+- creative: design, art, music, video, or writing work
+- meeting: calls, video meetings, live collaboration
+- admin: email, planning, scheduling, errands, routine upkeep
+- personal: life tasks like travel planning, shopping, health, finances
+- other: only when nothing above fits
 """
 
 @main
@@ -67,7 +76,7 @@ struct LifeUpdateAI {
         let categorySchema = DynamicGenerationSchema(
             name: "category",
             description: "The kind of session",
-            anyOf: ["deep_work", "maintenance", "meeting", "other"]
+            anyOf: ["deep_work", "learning", "creative", "meeting", "admin", "personal", "other"]
         )
         let root = DynamicGenerationSchema(
             name: "SessionSummary",

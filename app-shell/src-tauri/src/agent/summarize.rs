@@ -9,12 +9,12 @@ use chrono::DateTime;
 use std::collections::BTreeSet;
 use std::path::Path;
 
-const VALID_CATEGORIES: &[&str] = &["deep_work", "maintenance", "meeting", "other"];
+const VALID_CATEGORIES: &[&str] = &["deep_work", "maintenance", "meeting", "learning", "creative", "admin", "personal", "other"];
 
 const OLLAMA_PROMPT_TEMPLATE: &str = r#"You are summarizing a user's work session from redacted activity logs.
 Respond with ONLY a JSON object with exactly these keys:
 - "project": a short (2-6 word) name for what they were working on
-- "category": one of "deep_work", "maintenance", "meeting", "other"
+- "category": one of "deep_work" (focused building/creation), "learning" (research, reading, studying), "creative" (design, art, music, writing), "meeting" (calls, live collaboration), "admin" (email, planning, errands), "personal" (travel, shopping, health, finances), "other"
 - "summary": one or two plain sentences describing what was done, written like a changelog entry
 
 Critical rules (note: no example names appear below on purpose - never copy a
