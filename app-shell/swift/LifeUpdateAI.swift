@@ -27,6 +27,11 @@ Respond with ONLY a JSON object with exactly these keys:
 - "category": one of "deep_work", "maintenance", "meeting", "other"
 - "summary": one or two plain sentences describing what was done, written like a changelog entry
 
+Critical rules:
+- The apps in the log (terminals, editors, browsers) are TOOLS the user was using - the user does not build or work for those apps. Never say they improved, enhanced, or worked on the tool itself. "worked in Warp" means they used the Warp terminal for something else.
+- The real project name is usually inside window titles, file paths, folder names, and commit messages (e.g. a title "MyApp - Dashboard.tsx" means the project is MyApp). Name the project after that, never after a tool or app.
+- Describe what was concretely done (debugging an error, editing specific components, researching a problem) based only on the log. If intent is unclear, describe the visible activity plainly instead of inventing a goal.
+
 Activity log:
 """
 
@@ -71,7 +76,7 @@ struct LifeUpdateAI {
         }
 
         let session = LanguageModelSession(
-            instructions: "You summarize a user's work session from redacted activity logs into a changelog-style record. You always answer with a single JSON object and nothing else. Never include personal names, email addresses, usernames, or any other personally identifying details in your output - describe the work, not the people."
+            instructions: "You summarize a user's work session from redacted activity logs into a changelog-style record. You always answer with a single JSON object and nothing else. Never include personal names, email addresses, usernames, or any other personally identifying details in your output - describe the work, not the people. The apps in the log are tools the user was using, not things they build - infer their actual project from window titles, file paths, and commit messages."
         )
 
         do {
