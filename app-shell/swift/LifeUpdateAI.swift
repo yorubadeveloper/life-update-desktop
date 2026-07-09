@@ -3,12 +3,18 @@
 // The FoundationModels framework (macOS 26+) is Swift-only, so the Rust
 // core shells out to this helper. `check` reports availability; `summarize`
 // reads a redacted activity log on stdin and prints a JSON object
-// {project, category, summary} on stdout. The model is managed entirely by
-// macOS: nothing downloaded, nothing resident in our process.
+// {project, category, summary} on stdout.
 //
-// Deliberately avoids the @Generable guided-generation macro: the macro
-// plugin ships only with full Xcode, not the Command Line Tools, so plain
-// prompting + JSON extraction keeps the build working with CLT alone.
+// Uses guided generation with a *runtime* schema (DynamicGenerationSchema)
+// rather than the @Generable macro - the macro's compiler plugin ships only
+// with full Xcode, while the dynamic API works with Command Line Tools
+// alone. Guided generation structurally guarantees the output shape: the
+// category is a real enum (can't hallucinate a fifth value), and there is
+// no JSON-in-prose to parse. Temperature is kept low: summaries should be
+// boring and factual.
+//
+// Prompt rules deliberately contain NO example names of any kind - small
+// models parrot literal examples straight into their output.
 //
 // Built by scripts/build-ai-helper.sh into src-tauri/resources/ai-helper/.
 
@@ -20,34 +26,16 @@ func fail(_ message: String, code: Int32 = 1) -> Never {
     exit(code)
 }
 
-let PROMPT_HEADER = """
-You are summarizing a user's work session from redacted activity logs.
-Respond with ONLY a JSON object with exactly these keys:
-- "project": a short (2-6 word) name for what they were working on
-- "category": one of "deep_work", "maintenance", "meeting", "other"
-- "summary": one or two plain sentences describing what was done, written like a changelog entry
+let INSTRUCTIONS = """
+You summarize a user's work session from redacted activity logs into a changelog-style record.
 
-Critical rules:
-- The apps in the log (terminals, editors, browsers) are TOOLS the user was using - the user does not build or work for those apps. Never say they improved, enhanced, or worked on the tool itself. "worked in Warp" means they used the Warp terminal for something else.
-- The real project name is usually inside window titles, file paths, folder names, and commit messages (e.g. a title "MyApp - Dashboard.tsx" means the project is MyApp). Name the project after that, never after a tool or app.
-- Describe what was concretely done (debugging an error, editing specific components, researching a problem) based only on the log. If intent is unclear, describe the visible activity plainly instead of inventing a goal.
-
-Activity log:
+Rules:
+- The apps in the log (terminals, editors, browsers) are tools the user was using. The user does not build or work for those apps. Never describe the session as improving or working on one of those apps.
+- Window titles usually contain the real project, file, or document name. Take the project name from there, never from a tool or app name.
+- Never output a placeholder or invented name. If no project name is visible in the log, use a short plain description of the activity as the project instead.
+- The summary describes what was concretely done (debugging an error, editing specific files, researching a problem), based only on the log. If intent is unclear, describe the visible activity plainly rather than inventing a goal.
+- Never include personal names, email addresses, usernames, or other personally identifying details. Describe the work, not the people.
 """
-
-/// Extract the first {...} block from model output (models sometimes wrap
-/// JSON in prose or code fences despite instructions).
-func extractJSONObject(_ text: String) -> [String: Any]? {
-    guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}") else {
-        return nil
-    }
-    let candidate = String(text[start...end])
-    guard let data = candidate.data(using: .utf8),
-          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        return nil
-    }
-    return obj
-}
 
 @main
 struct LifeUpdateAI {
@@ -75,19 +63,42 @@ struct LifeUpdateAI {
             fail("no activity log on stdin")
         }
 
-        let session = LanguageModelSession(
-            instructions: "You summarize a user's work session from redacted activity logs into a changelog-style record. You always answer with a single JSON object and nothing else. Never include personal names, email addresses, usernames, or any other personally identifying details in your output - describe the work, not the people. The apps in the log are tools the user was using, not things they build - infer their actual project from window titles, file paths, and commit messages."
+        // Runtime-built schema: {project: String, category: enum, summary: String}
+        let categorySchema = DynamicGenerationSchema(
+            name: "category",
+            description: "The kind of session",
+            anyOf: ["deep_work", "maintenance", "meeting", "other"]
+        )
+        let root = DynamicGenerationSchema(
+            name: "SessionSummary",
+            properties: [
+                .init(
+                    name: "project",
+                    description: "A short 2-6 word name for what was worked on, taken from project/file/document names in the log",
+                    schema: DynamicGenerationSchema(type: String.self)
+                ),
+                .init(name: "category", schema: categorySchema),
+                .init(
+                    name: "summary",
+                    description: "One or two plain sentences describing what was concretely done, like a changelog entry",
+                    schema: DynamicGenerationSchema(type: String.self)
+                ),
+            ]
         )
 
         do {
-            let response = try await session.respond(to: PROMPT_HEADER + "\n" + activity + "\n\nJSON:")
-            guard let obj = extractJSONObject(response.content) else {
-                fail("model output was not valid JSON")
-            }
+            let schema = try GenerationSchema(root: root, dependencies: [])
+            let session = LanguageModelSession(instructions: INSTRUCTIONS)
+            let response = try await session.respond(
+                to: "Summarize this work session:\n\n\(activity)",
+                schema: schema,
+                options: GenerationOptions(temperature: 0.1)
+            )
+            let content = response.content
             let out: [String: String] = [
-                "project": obj["project"] as? String ?? "",
-                "category": obj["category"] as? String ?? "",
-                "summary": obj["summary"] as? String ?? "",
+                "project": (try? content.value(String.self, forProperty: "project")) ?? "",
+                "category": (try? content.value(String.self, forProperty: "category")) ?? "",
+                "summary": (try? content.value(String.self, forProperty: "summary")) ?? "",
             ]
             let data = try JSONSerialization.data(withJSONObject: out)
             FileHandle.standardOutput.write(data)

@@ -17,9 +17,11 @@ Respond with ONLY a JSON object with exactly these keys:
 - "category": one of "deep_work", "maintenance", "meeting", "other"
 - "summary": one or two plain sentences describing what was done, written like a changelog entry
 
-Critical rules:
-- The apps in the log (terminals, editors, browsers) are TOOLS the user was using - the user does not build or work for those apps. Never say they improved, enhanced, or worked on the tool itself. "worked in Warp" means they used the Warp terminal for something else.
-- The real project name is usually inside window titles, file paths, folder names, and commit messages (e.g. a title "MyApp - Dashboard.tsx" means the project is MyApp). Name the project after that, never after a tool or app.
+Critical rules (note: no example names appear below on purpose - never copy a
+name from these instructions into your output):
+- The apps in the log (terminals, editors, browsers) are TOOLS the user was using - the user does not build or work for those apps. Never say they improved, enhanced, or worked on the tool itself.
+- Window titles usually contain the real project, file, or document name. Take the project name from there, never from a tool or app name.
+- Never output a placeholder or invented name. If no project name is visible in the log, use a short plain description of the activity as the project instead.
 - Never include personal names, email addresses, usernames, or any other personally identifying details in your output - describe the work, not the people.
 
 Activity log:
@@ -160,7 +162,14 @@ pub fn summarize_session(session: &[RawEvent], engine: &SummaryEngine) -> Option
     };
     let project = {
         let p = project.trim();
-        let p = if p.is_empty() { "Untitled session" } else { p };
+        // Models occasionally emit placeholder names despite instructions -
+        // catch the classics and fall back rather than publish them.
+        let lowered = p.to_lowercase();
+        let is_placeholder = matches!(
+            lowered.as_str(),
+            "myapp" | "my app" | "project" | "project name" | "projectname" | "the project" | "untitled" | "unknown" | "n/a"
+        );
+        let p = if p.is_empty() || is_placeholder { "Untitled session" } else { p };
         p.chars().take(120).collect::<String>()
     };
     let summary = {
