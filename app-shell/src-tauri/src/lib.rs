@@ -341,6 +341,41 @@ fn is_agent_running(state: State<AgentProcess>) -> bool {
     agent::is_running(&state)
 }
 
+#[tauri::command]
+fn restart_app(app: AppHandle) {
+    app.restart();
+}
+
+/// Checks GitHub Releases for a newer build shortly after launch,
+/// downloads + installs it in the background (signature-verified), then
+/// tells the UI so the user can restart when convenient - no more manually
+/// re-downloading the .dmg for every fix.
+fn spawn_update_check(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        let updater = match tauri_plugin_updater::UpdaterExt::updater(&app) {
+            Ok(u) => u,
+            Err(e) => {
+                log::warn!("updater unavailable: {e}");
+                return;
+            }
+        };
+        match updater.check().await {
+            Ok(Some(update)) => {
+                let version = update.version.clone();
+                match update.download_and_install(|_, _| {}, || {}).await {
+                    Ok(()) => {
+                        let _ = app.emit("update-ready", version);
+                    }
+                    Err(e) => log::warn!("update install failed: {e}"),
+                }
+            }
+            Ok(None) => {}
+            Err(e) => log::warn!("update check failed: {e}"),
+        }
+    });
+}
+
 /// "Launch at login" registers a launchd plist pointing at the app's
 /// *current* path - warn before enabling from a DMG/translocated copy.
 #[tauri::command]
@@ -375,6 +410,7 @@ fn delete_local_data(state: State<AgentProcess>) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -407,6 +443,7 @@ pub fn run() {
             is_running_from_applications,
             delete_local_data,
             is_agent_running,
+            restart_app,
         ])
         .setup(|app| {
             let show_item = MenuItem::with_id(app, "show", "Open Settings", true, None::<&str>)?;
@@ -429,6 +466,8 @@ pub fn run() {
                 let state: State<AgentProcess> = app.state();
                 let _ = agent::start(app.handle(), &state);
             }
+
+            spawn_update_check(app.handle().clone());
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())

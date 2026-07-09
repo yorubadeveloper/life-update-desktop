@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { House, ClockCounterClockwise, GearSix } from "@phosphor-icons/react";
+import { listen } from "@tauri-apps/api/event";
+import { House, ClockCounterClockwise, GearSix, ArrowClockwise } from "@phosphor-icons/react";
 import "./App.css";
 import { Onboarding } from "./components/Onboarding";
 import { Home } from "./components/Home";
@@ -19,12 +20,17 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [hasToken, setHasToken] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
 
   useEffect(() => {
     invoke<{ token: string; api_url: string }>("get_token_settings").then((s) => {
       setHasToken(!!s.token);
       setLoading(false);
     });
+    const unlisten = listen<string>("update-ready", (e) => setUpdateVersion(e.payload));
+    return () => {
+      unlisten.then((f) => f());
+    };
   }, []);
 
   if (loading) {
@@ -67,6 +73,21 @@ export default function App() {
         {tab === "history" && <History />}
         {tab === "settings" && <Settings />}
       </main>
+
+      {updateVersion && (
+        <div className="fixed bottom-4 right-4 glass rounded-2xl px-4 py-3 flex items-center gap-3 shadow-lg border border-black/5 z-50">
+          <p className="text-sm text-foreground">
+            Update <span className="font-semibold">v{updateVersion}</span> is ready
+          </p>
+          <button
+            onClick={() => invoke("restart_app")}
+            className="flex items-center gap-1.5 bg-primary text-primary-foreground rounded-xl px-3 py-1.5 text-sm font-medium hover:bg-accent transition-colors"
+          >
+            <ArrowClockwise size={14} weight="bold" />
+            Restart
+          </button>
+        </div>
+      )}
     </div>
   );
 }
