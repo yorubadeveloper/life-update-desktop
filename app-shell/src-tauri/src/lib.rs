@@ -73,15 +73,24 @@ async fn verify_token_inner(api: &str, token: &str) -> Result<VerifiedAccount, S
         .await
         .map_err(|_| "Couldn't reach life-update.com - check your connection and try again.".to_string())?;
 
-    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+    let status = resp.status();
+    if status == reqwest::StatusCode::UNAUTHORIZED {
         return Err("That token isn't valid. Generate a fresh one at life-update.com → Settings → Devices.".to_string());
     }
-    if !resp.status().is_success() {
-        return Err(format!("life-update.com returned an error ({})", resp.status()));
+    if status == reqwest::StatusCode::NOT_FOUND {
+        // The server predates the verification endpoint (or the API URL is
+        // misconfigured) - not the user's fault, don't show them a 404.
+        return Err("Couldn't verify the token right now - life-update.com is being updated. Try again in a few minutes.".to_string());
+    }
+    if status.is_server_error() {
+        return Err("life-update.com is having trouble right now. Try again in a few minutes.".to_string());
+    }
+    if !status.is_success() {
+        return Err("Couldn't verify the token. Check that it was copied completely and try again.".to_string());
     }
     resp.json::<VerifiedAccount>()
         .await
-        .map_err(|_| "Unexpected response from life-update.com".to_string())
+        .map_err(|_| "Couldn't verify the token right now. Try again in a few minutes.".to_string())
 }
 
 /// Validates a pasted token against life-update.com BEFORE anything is
