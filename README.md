@@ -14,248 +14,186 @@ what's captured, what's redacted, and what's sent, before you ever run it.
 
 1. **Watches** your active window/app, file saves, git commits, and
    (opt-in, off by default) what's actually on screen.
-2. **Redacts** anything sensitive, in three layers, before it's ever sent
-   anywhere (see below).
-3. **Clusters** your activity into work sessions using a local LLM
-   (phi3:mini via [Ollama](https://ollama.com)) - entirely on your machine.
+2. **Redacts** anything sensitive before it's ever stored (see below).
+3. **Summarizes** your activity into work sessions using
+   **Apple Intelligence** (the on-device model built into macOS 26+) -
+   entirely on your machine, nothing downloaded, nothing sent to any AI
+   provider. Macs without Apple Intelligence can use a local model through
+   [Ollama](https://ollama.com) instead.
 4. **Syncs** only the distilled result - a project name, category, a rough
    focus score, and a one-sentence summary - to life-update.com.
 
 Nothing about *how* you did the work (keystrokes, screen contents, file
 contents, exact URLs visited) ever leaves your machine. Only the distilled
-summary of *what* session happened, and when.
+summary of *what* session happened, and when. The **History** tab in the
+app shows every single thing that was captured, and clicking any session on
+**Home** shows exactly which events its summary was based on - full
+transparency, verifiable in the UI, not just in the code.
 
-## The privacy model - three layers, in order
+## Architecture: one small Rust process
 
-1. **Exclude-list** (`life_update_agent/capture/exclude_list.py`) - checked
-   *before* anything is captured. Password managers, banking sites, and
-   anything you add yourself never become an event in the first place.
-2. **Pattern + entropy scan** (`life_update_agent/redaction/`) - runs
-   inline, before any write to local storage. Regex recognizers catch known
-   secret shapes (API keys, tokens, card numbers, emails, JWTs); a Shannon
-   entropy check catches high-randomness strings that don't match a known
-   shape.
-3. **Contextual PII redaction** (`life_update_agent/inference/presidio_pass.py`)
-   - catches what the first two layers can't: names, addresses, anything
-   sensitive by context rather than format. Uses
-   [Microsoft Presidio](https://microsoft.github.io/presidio/) with a local
-   spaCy model. Runs only inside the idle-triggered inference worker, never
-   in the real-time capture path.
-
-Only after all three layers have run does anything get handed to the local
-LLM for clustering/summarization, and only the LLM's structured output -
-never the underlying activity log - is queued for sync.
-
-## Architecture
+The whole agent lives inside the Tauri app as a handful of Rust threads -
+there is no separate daemon, no Python runtime, no bundled model server.
+The app is ~18MB installed and idles around 100MB of memory (mostly the
+settings UI's webview).
 
 ```
-capture (always-on, no models)
-  -> pattern + entropy scan (deterministic, inline)
+capture threads (always-on, no models, native OS APIs)
+  window tracker · file/git watcher · screen watcher (opt-in)
+  -> pattern + entropy redaction (deterministic, inline)
   -> local SQLite store (raw_events)
-  -> [idle + low CPU load only]
-     -> Presidio contextual PII pass
-     -> session clustering (time-gap based)
-     -> phi3:mini via Ollama -> {project, category, summary}
-     -> focus score (computed, not LLM-guessed)
-  -> sync queue -> POST /api/portfolio-events (life-update.com)
+sync (every 60s, cheap)
+  -> unsent summaries -> POST /api/portfolio-events
+inference (only when idle + low CPU load)
+  -> session clustering (time-gap based)
+  -> Apple Intelligence (or Ollama) -> {project, category, summary}
+  -> focus score (computed, not LLM-guessed)
+  -> sync queue
 ```
 
-Everything above the idle gate runs continuously and cheaply. Everything
-below it only runs when your machine is idle and under low load, so it
-never competes with what you're actually doing.
+Screenpipe-style native-API choices, and what each replaced:
 
-## Setup
+| Concern | Now | Previously |
+|---|---|---|
+| Screen OCR | **Apple Vision framework**, in-process, ~100ms, hardware-accelerated | Bundled Tesseract binary |
+| Session summaries | **Apple Intelligence** (FoundationModels), managed by macOS, zero download, zero resident RAM | Bundled Ollama runtime + multi-GB model held in memory |
+| Idle detection | One `CGEventSourceSecondsSinceLastEventType` call | Always-on pynput keyboard/mouse listeners |
+| Contextual PII pass | Extended regex + entropy scan | Presidio + spaCy (~900MB resident) |
+| The agent itself | Rust threads in the app | PyInstaller-frozen Python daemon child process |
 
-Requires Python 3.13+, [`uv`](https://docs.astral.sh/uv/), and
-[Ollama](https://ollama.com) installed locally.
+**Ollama is no longer required, bundled, or spawned.** It's an optional
+alternative engine: if you pick an Ollama model in Settings (for Macs
+without Apple Intelligence), the app talks to *your own* Ollama install at
+`localhost:11434`, pulls with visible progress, and passes `keep_alive: 0`
+so the model unloads the moment each summarization batch finishes.
 
-```bash
-cd agent
-uv sync
-cp .env.example .env
-```
+## The privacy model
 
-Edit `.env`:
+1. **Exclude-list** (`agent/mod.rs::is_excluded`) - checked *before*
+   anything is captured. Password managers, banking sites, and anything you
+   add yourself never become an event in the first place. Excluded apps are
+   never screenshotted at all.
+2. **Pattern + entropy scan** (`agent/redaction.rs`) - runs inline, before
+   any write to local storage. Regex recognizers catch known secret shapes
+   (API keys, tokens, Luhn-validated card numbers, emails, JWTs, private
+   key blocks); a Shannon entropy check catches high-randomness strings
+   that don't match a known shape.
+3. **On-device summarization** - the (already-redacted) activity log is
+   summarized by a model that never leaves the machine, and only the
+   model's structured output - never the underlying log - is queued for
+   sync.
 
-| Variable | Description |
-|---|---|
-| `LIFE_UPDATE_TOKEN` | From life-update.com → Settings → Devices → "Generate token" |
-| `LIFE_UPDATE_API_URL` | Defaults to `https://life-update.com`; point at `http://localhost:3000` for a local dev server |
-| `OLLAMA_HOST` | Defaults to `http://localhost:11434` |
-| `OLLAMA_MODEL` | Optional - overrides the model chosen via `model choose` below |
-| `IDLE_THRESHOLD_MINUTES` | How long the machine must be idle before the inference worker runs (default 3) |
-| `CPU_LOAD_CEILING_PERCENT` | CPU ceiling the worker also waits under (default 30) |
-| `WATCH_DIRS` | Comma-separated project directories to watch for file/git activity (defaults to the current directory) |
+## The app
 
-### macOS permissions
+A [Tauri](https://tauri.app) app with a sidebar:
 
-Window-title tracking uses the Accessibility APIs. The first time you run
-the agent, macOS will prompt you to grant Accessibility (and possibly
-Screen Recording) permission to your terminal - this is required for
-`window_tracker.py` to read window titles. If you skip it, the agent keeps
-running but logs a warning instead of crashing.
+- **Home** - agent status, start/pause, capture counters, and every
+  summarized session. Click a session to see the exact (redacted) events
+  the summary was based on.
+- **History** - a live feed of everything captured on this Mac, with
+  whether it's been summarized yet. Click a row to expand its full text.
+- **Settings** - AI engine picker (Apple Intelligence default; Ollama
+  models optional, with live pull progress), screen watching (off by
+  default, interval + vision engine), exclude-list management, launch at
+  login, and a danger zone that deletes all local data.
 
-### Choose a model
-
-The agent uses a local LLM (via Ollama) to cluster your activity into
-sessions. Pick one - pulled automatically if not already present:
-
-```bash
-uv run life-update-agent model list
-uv run life-update-agent model choose phi3:mini   # or qwen2.5:0.5b, llama3.2:1b, ...
-```
+Plus a tray icon (open settings / pause / resume / quit). Closing the
+window hides it; capture keeps running in the tray.
 
 ### Screen watching (optional, off by default)
 
-Window titles and file paths alone only tell you *which app* was open, not
-what was actually being worked on. Screen watching closes that gap: it
-periodically reads what's on screen (only the active window, not the full
-screen) and feeds the extracted text into the same session summary the
-agent already writes - so a session reads "debugging a memory leak in the
-queue implementation" instead of "used PyCharm".
-
-Capture is hybrid: on a timer (default every 120s), and immediately
-whenever you switch app/window, so context-switching never waits out a
-stale interval. The exclude-list gates this exactly like everything else -
-excluded apps are never screenshotted at all.
-
-Two engines to choose from:
-
-```bash
-uv run life-update-agent vision list
-uv run life-update-agent vision choose tesseract     # or qwen2.5vl:3b, qwen2.5vl:7b
-uv run life-update-agent screen enable
-uv run life-update-agent screen interval 120
-```
+Window titles alone only say *which app* was open. Screen watching reads
+what's on screen so a session says "debugging a memory leak in the queue
+implementation" instead of "used PyCharm". Capture is hybrid: on a timer
+(default 120s) and immediately on every app/window switch.
 
 | Engine | What it does | When it runs |
 |---|---|---|
-| `tesseract` (default) | Fast OCR, literal text only (~35 MB, no GPU) | Inline, in the capture loop - no lag |
-| `qwen2.5vl:3b` / `qwen2.5vl:7b` | A local vision model reads the screen semantically, not just its text | Deferred to the idle-gated worker (takes several seconds per frame - verified ~29s on this machine - so it can't run inline without stalling capture) |
+| `native` (default) | Apple Vision OCR - literal screen text, on-device, instant | Inline in the capture loop |
+| `qwen2.5vl:3b` / `:7b` | A local vision model describes the screen semantically | Deferred to the idle-gated worker (seconds per frame); frames wait in a small in-memory queue (capped at 20, never written to disk), requires the Ollama app |
 
-The vision-model path holds screenshots in a small **in-memory** queue
-(`capture/frame_queue.py`, capped at 20 frames, oldest dropped first) until
-the next idle window - never written to disk. This means vision-model
-descriptions lag behind capture during a long uninterrupted session;
-Tesseract does not have this lag, since it processes inline. Either way,
-raw images are discarded the moment text/description comes back, and that
-text goes through the exact same three-layer redaction as everything else
-before it ever touches storage.
+Raw images are discarded the moment text comes back, and that text goes
+through the same redaction as everything else before touching storage.
+macOS will prompt for Screen Recording permission the first time the
+watcher starts; if denied, screen watching disables itself for the session
+and everything else keeps working.
 
-Screen Recording permission is requested the first time the agent tries to
-capture with it enabled (same graceful-degradation pattern as Accessibility
-- logs a warning and disables itself rather than crashing if denied).
+## Development
 
-### Run it
-
-```bash
-uv run life-update-agent run
-```
-
-Runs in the foreground; `Ctrl+C` to stop. Manage the exclude-list with:
-
-```bash
-uv run life-update-agent exclude list
-uv run life-update-agent exclude add --app "Signal"
-uv run life-update-agent exclude add --title-pattern '(?i)\bmedical\b'
-```
-
-## The desktop shell (`app-shell/`)
-
-A [Tauri](https://tauri.app) app that wraps the Python daemon above with an
-actual UI: onboarding (paste your device token), a model picker with live
-pull progress, exclude-list management, a "launch at login" toggle, a
-screen-watching toggle with its own vision-engine picker and capture
-frequency control, and a tray icon (pause/resume, quit).
+Requires Rust (arm64 toolchain), Node 24, and Xcode Command Line Tools with
+the macOS 26 SDK (for the Apple Intelligence helper - see below).
 
 ```bash
 cd app-shell
-nvm use   # picks up Node 24 via .nvmrc
+nvm use
 npm install
-npm run tauri dev
+npm run tauri dev      # builds the AI helper automatically first
 ```
 
-### Building the real installer
+Config lives in `~/.life-update-agent/`: `config.json` (engine choices,
+exclude-list, screen watching - managed by the UI) and `.env`:
 
-The dev workflow above shells out to `uv run life-update-agent ...`. A real
-build instead bundles a frozen Python binary, the Ollama runtime, and
-Tesseract as resources, so the `.app`/`.dmg` runs standalone - no
-`uv`/`python`/`ollama`/`tesseract` required on the target machine:
+| Variable | Description |
+|---|---|
+| `LIFE_UPDATE_TOKEN` | Written by onboarding; from life-update.com → Settings → Devices |
+| `LIFE_UPDATE_API_URL` | Defaults to `https://life-update.com` |
+| `OLLAMA_HOST` | Defaults to `http://localhost:11434` (only used with an Ollama engine) |
+| `WATCH_DIRS` | Comma-separated project directories to watch for file/git activity |
+| `IDLE_THRESHOLD_MINUTES` | Idle time before the inference worker runs (default 3) |
+| `CPU_LOAD_CEILING_PERCENT` | CPU ceiling the worker also waits under (default 30) |
+
+### The Apple Intelligence helper
+
+The FoundationModels framework is Swift-only, so the one non-Rust piece is
+`swift/LifeUpdateAI.swift` (~90 lines): reads an activity log on stdin,
+prints `{project, category, summary}` JSON on stdout. The Rust worker
+shells out to it per session. It deliberately avoids the `@Generable`
+guided-generation macro because that macro's compiler plugin ships only
+with full Xcode - plain prompting keeps the build working with Command
+Line Tools alone. `scripts/build-ai-helper.sh` compiles it into
+`src-tauri/resources/ai-helper/` (wired into `beforeDevCommand`/
+`beforeBuildCommand`, so it's automatic).
+
+On Macs where Apple Intelligence is unavailable (pre-26 macOS, Intel, or
+not enabled in System Settings), the helper reports why, the UI surfaces
+it, and the Ollama engines remain as the alternative.
+
+### Building the installer
 
 ```bash
-../agent/build.sh                # freezes agent/ -> agent/dist/life-update-agent/ (PyInstaller)
-./scripts/fetch-ollama.sh        # downloads Ollama's macOS runtime -> src-tauri/ollama-runtime/
-./scripts/bundle-tesseract.sh    # relocates local Homebrew tesseract -> src-tauri/tesseract-runtime/
-./scripts/prepare-resources.sh   # stages all three into src-tauri/resources/ for bundling
-npm run tauri:build              # -> src-tauri/target/aarch64-apple-darwin/release/bundle/{macos,dmg}/
+npm run tauri:build    # -> src-tauri/target/aarch64-apple-darwin/release/bundle/{macos,dmg}/
 ```
 
-`bundle-tesseract.sh` requires an arm64 Homebrew install (`brew install
-tesseract dylibbundler`) - if `tesseract`/`dylibbundler` resolve from an
-Intel Homebrew at `/usr/local` instead of the native one at
-`/opt/homebrew`, the bundled binary comes out x86_64 (verify with `file
-src-tauri/tesseract-runtime/tesseract`, expect `arm64`).
+The `.dmg` is ~7MB. **Always `npm run tauri:build`, never plain
+`npm run tauri build`**: on a machine where rustup itself runs under
+Rosetta, a plain build silently produces an Intel-only binary that fails
+on other Apple Silicon Macs with "app is damaged" (this shipped once).
+`tauri:build` pins `--target aarch64-apple-darwin`. The binary is named
+`Life-Update` (via `mainBinaryName`), which is also what macOS shows in
+login-items/background notifications.
 
-**Always use `npm run tauri:build`, never plain `npm run tauri build`.**
-On a machine where `rustup`/`cargo` are themselves x86_64 running under
-Rosetta (`rustc -vV` reports `host: x86_64-apple-darwin` even on Apple
-Silicon - check with `arch`, which reports the real CPU), a plain build
-defaults to the compiler's own host triple and silently produces an
-**Intel-only main binary** even on an arm64 Mac. This actually shipped
-once: the `.app` opened fine here (Rosetta made it invisible locally) but
-failed on another Apple Silicon Mac with "app is damaged, move to Bin" -
-a harder Gatekeeper failure than the usual "can't verify" warning,
-because it wasn't just unsigned, it also needed Rosetta and had an
-invalid signature for the translated slice. `tauri:build` bakes in
-`--target aarch64-apple-darwin` so this can't silently regress. If
-`rustup target list --installed` doesn't show `aarch64-apple-darwin`, add
-it with `rustup target add aarch64-apple-darwin` first.
+## Uninstalling
 
-`agent.rs`/`ollama_process.rs` resolve the bundled resources at runtime if
-present and fall back to `uv run`/system `ollama` otherwise - the same dev
-workflow above keeps working unchanged. If something is already serving on
-`OLLAMA_HOST` (a system Ollama install), it's reused rather than
-double-spawned, and never killed on quit unless we started it.
-
-Known trade-off: bundling Ollama's own binary means macOS surfaces it by
-its own name in places like the "background activity" notification on
-first launch - it's invisible in the sense that the user never installs it
-separately, but not invisible at the OS level. Switching to an in-process
-inference library (e.g. `llama-cpp-python`) would remove that, at the cost
-of reworking the model-pull UI around raw GGUF downloads instead of Ollama
-tags - not done, by choice, for now.
-
-Tesseract (the screen-watching feature's default OCR engine) is bundled
-too, the same resource-directory pattern as Ollama:
-`scripts/bundle-tesseract.sh` makes a local Homebrew-built binary
-relocatable via `dylibbundler` (unlike Ollama, there's no official
-prebuilt redistributable tarball for it) and stages it alongside
-`tessdata/eng.traineddata`. `capture/screen_watcher.py` resolves the
-bundled copy when running as a frozen build (falling back to a system
-install on PATH in dev) - verified by running the packaged app with
-`/usr/local/bin` stripped from PATH and confirming OCR still succeeded.
-The bundled binary and its dylib dependencies are ~13MB total; everything
-else it links against (`libcurl`, `Accelerate.framework`, `libc++`,
-`libSystem`) is a standard macOS system library already on every Mac, not
-something bundled.
+1. In the app: Settings → **Delete all local data**. This removes
+   `~/.life-update-agent/` (capture database, device token, settings) and
+   the launch-at-login entry.
+2. Drag **Life-Update** from Applications to the Bin.
+3. Only if you ever picked an Ollama model: those live in the Ollama app's
+   own storage - remove them there (`ollama rm <model>`), since
+   uninstalling Life-Update never touches another app's data.
 
 ## Status
 
-Layers 1-5 (capture, redaction, local storage, idle-gated inference, sync)
-and Layer 7 (packaging) are done: `npm run tauri:build` produces a working,
-correctly-arm64 `.dmg` with a frozen Python daemon and bundled Ollama
-runtime, verified to launch, show the correct name/icon in the Dock, and
-correctly reuse (not duplicate) an already-running system Ollama. Model
-weights are download-on-first-run rather than bundled, to keep the
-installer small.
-Screen watching (opt-in OCR/vision capture) is built and verified
-end-to-end, including a real vision-model call that correctly described
-actual on-screen work, and Tesseract is now bundled the same way Ollama is
-(see above). Voice/ASR is deferred to a later phase entirely.
+The full pipeline (capture → redaction → local store → idle-gated
+on-device summarization → sync) is pure Rust + one Swift helper, verified
+end-to-end on macOS 26: real windows/files/commits captured, real Apple
+Vision OCR of screen content, a real Apple Intelligence summarization
+producing correct `{project, category, summary}` output, and real syncs to
+life-update.com. Voice/ASR is deferred to a later phase entirely.
 
 ## Contributing
 
-This is open source specifically so you can verify the privacy claims above
-yourself - read `life_update_agent/redaction/` and
-`life_update_agent/inference/presidio_pass.py` before trusting any of this
-with your screen. Issues and PRs welcome.
+This is open source specifically so you can verify the privacy claims
+above yourself - read `app-shell/src-tauri/src/agent/redaction.rs` and
+`agent/summarize.rs` before trusting any of this with your screen. Issues
+and PRs welcome.

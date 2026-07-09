@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Play, Pause, Trash, Plus } from "@phosphor-icons/react";
+import { Trash, Plus, Warning } from "@phosphor-icons/react";
 import { isEnabled as isAutostartEnabled, enable as enableAutostart, disable as disableAutostart } from "@tauri-apps/plugin-autostart";
 import { usePullProgress, type PullProgress } from "../hooks/usePullProgress";
 
@@ -17,30 +17,22 @@ interface ExcludeList {
   title_patterns: string[];
 }
 
-interface AgentStatus {
-  unprocessed_raw_events: number;
-  total_captured_events: number;
-  unsent_portfolio_events: number;
-  total_synced_portfolio_events: number;
-  last_sync_at: string | null;
-}
-
 export function Settings() {
-  const [running, setRunning] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [pulling, setPulling] = useState<string | null>(null);
   const [pullProgress, setPullProgress] = useState<PullProgress | null>(null);
   const [excludeList, setExcludeList] = useState<ExcludeList>({ apps: [], title_patterns: [] });
   const [newApp, setNewApp] = useState("");
   const [newPattern, setNewPattern] = useState("");
-  const [status, setStatus] = useState<AgentStatus | null>(null);
   const [autostart, setAutostart] = useState(false);
+  const [autostartError, setAutostartError] = useState<string | null>(null);
   const [visionEngines, setVisionEngines] = useState<ModelInfo[]>([]);
   const [visionPulling, setVisionPulling] = useState<string | null>(null);
   const [visionPullProgress, setVisionPullProgress] = useState<PullProgress | null>(null);
   const [screenWatchEnabled, setScreenWatchEnabled] = useState(false);
   const [screenInterval, setScreenInterval] = useState(120);
-  const [autostartError, setAutostartError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [engineError, setEngineError] = useState<string | null>(null);
 
   useEffect(() => {
     isAutostartEnabled().then(setAutostart).catch(() => {});
@@ -89,20 +81,12 @@ export function Settings() {
       .catch(() => {});
   }, []);
 
-  const refreshStatus = useCallback(() => {
-    invoke<boolean>("is_agent_running").then(setRunning).catch(() => {});
-    invoke<AgentStatus>("agent_status").then(setStatus).catch(() => {});
-  }, []);
-
   useEffect(() => {
     refreshModels();
     refreshExcludeList();
-    refreshStatus();
     refreshVisionEngines();
     refreshScreenWatchSettings();
-    const interval = setInterval(refreshStatus, 5000);
-    return () => clearInterval(interval);
-  }, [refreshModels, refreshExcludeList, refreshStatus, refreshVisionEngines, refreshScreenWatchSettings]);
+  }, [refreshModels, refreshExcludeList, refreshVisionEngines, refreshScreenWatchSettings]);
 
   usePullProgress(
     useCallback((p) => {
@@ -125,22 +109,14 @@ export function Settings() {
     }, [pulling, visionPulling, refreshModels, refreshVisionEngines]),
   );
 
-  async function toggleAgent() {
-    if (running) {
-      await invoke("stop_agent");
-    } else {
-      await invoke("start_agent");
-    }
-    refreshStatus();
-  }
-
   async function chooseModel(name: string) {
     setPulling(name);
     setPullProgress(null);
+    setEngineError(null);
     try {
       await invoke("choose_model", { name });
     } catch (e) {
-      alert(String(e));
+      setEngineError(String(e));
     } finally {
       setPulling(null);
       refreshModels();
@@ -150,10 +126,11 @@ export function Settings() {
   async function chooseVisionEngine(name: string) {
     setVisionPulling(name);
     setVisionPullProgress(null);
+    setEngineError(null);
     try {
       await invoke("choose_vision_engine", { name });
     } catch (e) {
-      alert(String(e));
+      setEngineError(String(e));
     } finally {
       setVisionPulling(null);
       refreshVisionEngines();
@@ -197,23 +174,18 @@ export function Settings() {
     refreshExcludeList();
   }
 
+  async function deleteAllData() {
+    try {
+      await invoke("delete_local_data");
+      window.location.reload(); // token is gone - back to onboarding
+    } catch (e) {
+      setEngineError(String(e));
+    }
+  }
+
   return (
-    <div className="max-w-2xl mx-auto px-4 py-10 space-y-8">
-      <div className="glass rounded-2xl p-6 flex items-center justify-between">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">Life-Update</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {running ? "Running - watching your activity" : "Paused"}
-          </p>
-        </div>
-        <button
-          onClick={toggleAgent}
-          className="flex items-center gap-2 bg-primary text-primary-foreground rounded-xl px-4 py-2.5 text-sm font-medium hover:bg-accent transition-colors"
-        >
-          {running ? <Pause size={16} weight="bold" /> : <Play size={16} weight="bold" />}
-          {running ? "Pause" : "Start"}
-        </button>
-      </div>
+    <div className="max-w-2xl mx-auto px-6 py-8 space-y-6">
+      <h1 className="text-lg font-semibold text-foreground">Settings</h1>
 
       <div className="glass rounded-2xl p-4 space-y-2">
         <label className="flex items-center justify-between cursor-pointer">
@@ -232,12 +204,13 @@ export function Settings() {
       </div>
 
       <div className="glass rounded-2xl p-6 space-y-4">
-        <h2 className="font-semibold text-foreground text-sm">Local model</h2>
+        <h2 className="font-semibold text-foreground text-sm">AI engine</h2>
         <p className="text-sm text-muted-foreground">
-          Used to cluster your activity into sessions, entirely on this machine. Downloaded and
-          run via Ollama, stored in Ollama's own data folder - uninstalling Life-Update does not
-          remove it. Manage or delete downloaded models from the Ollama app directly.
+          Summarizes your activity into sessions, entirely on this machine. Apple
+          Intelligence is built into macOS; the alternatives run through the Ollama app and
+          are stored in Ollama's own folder (uninstalling Life-Update doesn't remove them).
         </p>
+        {engineError && <p className="text-sm text-destructive">{engineError}</p>}
         <div className="space-y-2">
           {models.map((m) => (
             <button
@@ -351,7 +324,7 @@ export function Settings() {
             </div>
 
             <p className="text-xs text-muted-foreground">
-              Changes take effect next time you restart the agent (Pause, then Start above).
+              Changes take effect next time you restart the agent (Pause, then Start on Home).
             </p>
           </div>
         )}
@@ -410,19 +383,41 @@ export function Settings() {
         </div>
       </div>
 
-      {status && (
-        <div className="glass rounded-2xl p-6 space-y-2">
-          <h2 className="font-semibold text-foreground text-sm">Status</h2>
-          <p className="text-sm text-muted-foreground">
-            {status.total_synced_portfolio_events} session{status.total_synced_portfolio_events === 1 ? "" : "s"} synced ·{" "}
-            {status.unsent_portfolio_events} pending ·{" "}
-            {status.unprocessed_raw_events} raw event{status.unprocessed_raw_events === 1 ? "" : "s"} waiting for idle
-          </p>
-          {status.last_sync_at && (
-            <p className="text-xs text-muted-foreground">Last synced {new Date(status.last_sync_at).toLocaleString()}</p>
-          )}
-        </div>
-      )}
+      <div className="glass rounded-2xl p-6 space-y-3 border border-destructive/20">
+        <h2 className="font-semibold text-destructive text-sm flex items-center gap-1.5">
+          <Warning size={15} weight="bold" />
+          Delete all local data
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Removes the local capture database, your device token, all settings, and the
+          launch-at-login entry. To fully uninstall afterwards, drag Life-Update from
+          Applications to the Bin. If you used an Ollama model, it lives in the Ollama app's
+          own folder - remove it there.
+        </p>
+        {confirmDelete ? (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={deleteAllData}
+              className="bg-destructive text-white rounded-xl px-4 py-2 text-sm font-medium"
+            >
+              Yes, delete everything
+            </button>
+            <button
+              onClick={() => setConfirmDelete(false)}
+              className="text-sm text-muted-foreground px-3 py-2"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmDelete(true)}
+            className="border border-destructive/40 text-destructive rounded-xl px-4 py-2 text-sm font-medium hover:bg-destructive/5 transition-colors"
+          >
+            Delete all local data…
+          </button>
+        )}
+      </div>
     </div>
   );
 }

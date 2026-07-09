@@ -1,12 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Life-Update",
+  "mainBinaryName": "Life-Update",
   "version": "0.1.0",
   "identifier": "com.life-update.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "./scripts/build-ai-helper.sh && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "./scripts/build-ai-helper.sh && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -32,9 +33,7 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/life-update-agent": "life-update-agent",
-      "resources/ollama-runtime": "ollama-runtime",
-      "resources/tesseract-runtime": "tesseract-runtime"
+      "resources/ai-helper": "ai-helper"
     },
     "macOS": {
       "signingIdentity": "-"

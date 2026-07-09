@@ -1,8 +1,7 @@
-//! Curated vision-engine registry, mirrors
-//! `agent/src/life_update_agent/inference/vision_models.py` exactly.
-//! "tesseract" is a bundled local binary (not an Ollama tag); the other
-//! two are Ollama vision models, pulled the same way as the summarization
-//! model in `models.rs`.
+//! Curated vision-engine registry for screen watching. "native" is Apple's
+//! Vision framework OCR - on-device, hardware-accelerated, nothing bundled
+//! (it replaced the old Tesseract dependency). The qwen options are Ollama
+//! vision models for semantic descriptions, via the user's own Ollama.
 
 use serde::Serialize;
 
@@ -13,15 +12,21 @@ pub struct VisionChoice {
     pub description: &'static str,
 }
 
-pub const DEFAULT_VISION_ENGINE: &str = "tesseract";
-pub const TESSERACT_ENGINE: &str = "tesseract";
+pub const NATIVE_ENGINE: &str = "native";
+pub const DEFAULT_VISION_ENGINE: &str = NATIVE_ENGINE;
 
 pub const VISION_CHOICES: &[VisionChoice] = &[
-    VisionChoice { name: "tesseract", size_human: "~35 MB", description: "fast, text-only, runs inline (recommended default)" },
-    VisionChoice { name: "qwen2.5vl:3b", size_human: "3.2 GB", description: "reads screen content semantically, runs when idle" },
-    VisionChoice { name: "qwen2.5vl:7b", size_human: "6.0 GB", description: "higher quality, slower" },
+    VisionChoice {
+        name: NATIVE_ENGINE,
+        size_human: "built-in",
+        description: "Apple Vision OCR - on-device, instant, reads screen text (recommended)",
+    },
+    VisionChoice { name: "qwen2.5vl:3b", size_human: "3.2 GB", description: "describes screen content semantically, runs when idle (via the Ollama app)" },
+    VisionChoice { name: "qwen2.5vl:7b", size_human: "6.0 GB", description: "higher quality, slower (via the Ollama app)" },
 ];
 
 pub fn is_ollama_backed(name: &str) -> bool {
-    name != TESSERACT_ENGINE
+    // "tesseract" is the pre-rewrite name for the non-Ollama path; configs
+    // written by older builds may still carry it.
+    name != NATIVE_ENGINE && name != "tesseract"
 }

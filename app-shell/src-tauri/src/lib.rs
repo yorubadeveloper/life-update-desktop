@@ -1,13 +1,11 @@
 mod agent;
 mod models;
 mod ollama;
-mod ollama_process;
 mod settings;
 mod vision_models;
 
 use agent::{AgentProcess, AgentStatus};
-use models::MODEL_CHOICES;
-use ollama_process::OllamaProcess;
+use models::{is_ollama_model, MODEL_CHOICES};
 use serde::Serialize;
 use settings::LocalState;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -43,6 +41,13 @@ fn ollama_host() -> String {
         .unwrap_or_else(|| "http://localhost:11434".to_string())
 }
 
+fn apple_helper(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .resource_dir()
+        .map(|d| agent::apple_ai::helper_path(&d))
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn get_token_settings() -> TokenSettings {
     let values = settings::read_env_values(&settings::state_dir(), &["LIFE_UPDATE_TOKEN", "LIFE_UPDATE_API_URL"]);
@@ -51,7 +56,7 @@ fn get_token_settings() -> TokenSettings {
         api_url: values
             .get("LIFE_UPDATE_API_URL")
             .cloned()
-            .unwrap_or_else(|| "https://life-update.com".to_string()),
+            .unwrap_or_else(|| "https://www.life-update.com".to_string()),
     }
 }
 
@@ -97,10 +102,12 @@ fn remove_exclude_title_pattern(pattern: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn list_models() -> Result<Vec<ModelInfo>, String> {
-    let host = ollama_host();
+async fn list_models(app: AppHandle) -> Result<Vec<ModelInfo>, String> {
     let selected = settings::read_state().ollama_model;
-    let local_models = ollama::list_local_models(&host).await.ok();
+    let local_models = ollama::list_local_models(&ollama_host()).await.ok();
+    let apple_available = apple_helper(&app)
+        .map(|h| agent::apple_ai::availability(&h).is_ok())
+        .unwrap_or(false);
 
     Ok(MODEL_CHOICES
         .iter()
@@ -109,7 +116,11 @@ async fn list_models() -> Result<Vec<ModelInfo>, String> {
             size_human: m.size_human.to_string(),
             description: m.description.to_string(),
             selected: m.name == selected,
-            downloaded: local_models.as_ref().map(|set| set.contains(m.name)),
+            downloaded: if is_ollama_model(m.name) {
+                local_models.as_ref().map(|set| set.contains(m.name))
+            } else {
+                Some(apple_available)
+            },
         })
         .collect())
 }
@@ -120,10 +131,17 @@ async fn choose_model(app: AppHandle, name: String) -> Result<(), String> {
         return Err(format!("unknown model {name}"));
     }
 
-    let host = ollama_host();
-    let already_local = ollama::list_local_models(&host).await.unwrap_or_default();
-    if !already_local.contains(&name) {
-        ollama::pull_model(&app, &host, &name).await?;
+    if is_ollama_model(&name) {
+        let host = ollama_host();
+        let already_local = ollama::list_local_models(&host).await.map_err(|_| {
+            "Ollama isn't running. Install and open the Ollama app first, or pick Apple Intelligence instead.".to_string()
+        })?;
+        if !already_local.contains(&name) {
+            ollama::pull_model(&app, &host, &name).await?;
+        }
+    } else {
+        let helper = apple_helper(&app)?;
+        agent::apple_ai::availability(&helper)?;
     }
 
     let mut state = settings::read_state();
@@ -133,9 +151,9 @@ async fn choose_model(app: AppHandle, name: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn list_vision_engines() -> Result<Vec<ModelInfo>, String> {
-    let host = ollama_host();
     let selected = settings::read_state().vision_engine;
-    let local_models = ollama::list_local_models(&host).await.ok();
+    let selected = if selected == "tesseract" { vision_models::NATIVE_ENGINE.to_string() } else { selected };
+    let local_models = ollama::list_local_models(&ollama_host()).await.ok();
 
     Ok(VISION_CHOICES
         .iter()
@@ -161,7 +179,9 @@ async fn choose_vision_engine(app: AppHandle, name: String) -> Result<(), String
 
     if is_ollama_backed(&name) {
         let host = ollama_host();
-        let already_local = ollama::list_local_models(&host).await.unwrap_or_default();
+        let already_local = ollama::list_local_models(&host).await.map_err(|_| {
+            "Ollama isn't running. Install and open the Ollama app first, or keep the built-in engine.".to_string()
+        })?;
         if !already_local.contains(&name) {
             ollama::pull_model(&app, &host, &name).await?;
         }
@@ -204,43 +224,40 @@ fn agent_status() -> Result<AgentStatus, String> {
 }
 
 #[tauri::command]
-async fn start_agent(
-    app: AppHandle,
-    agent_state: State<'_, AgentProcess>,
-    ollama_state: State<'_, OllamaProcess>,
-) -> Result<(), String> {
-    let host = ollama_host();
-    ollama_process::ensure_server_running(&app, &host, &ollama_state).await?;
+fn recent_events(limit: u32) -> Result<Vec<agent::RawEventView>, String> {
+    agent::recent_events(limit.min(500))
+}
 
-    // Never pull a multi-GB model from here without the user having
-    // explicitly chosen to - onboarding walks them through picking one
-    // (with visible progress) before this is ever called for the first
-    // time, and `choose_model` is the only other path that pulls, also
-    // with explicit consent. If nothing is downloaded yet, fail loudly
-    // instead of silently starting a large background download.
+#[tauri::command]
+fn recent_sessions(limit: u32) -> Result<Vec<agent::SessionView>, String> {
+    agent::recent_sessions(limit.min(100))
+}
+
+#[tauri::command]
+fn session_events(started_at: String, ended_at: String) -> Result<Vec<agent::RawEventView>, String> {
+    agent::session_events(&started_at, &ended_at)
+}
+
+#[tauri::command]
+async fn start_agent(app: AppHandle, agent_state: State<'_, AgentProcess>) -> Result<(), String> {
+    // Never trigger a model download from here - onboarding/Settings are
+    // where downloads happen, explicitly. Just verify the chosen engine is
+    // actually usable and fail loudly if not.
     let model = settings::read_state().ollama_model;
-    let already_local = ollama::list_local_models(&host).await.unwrap_or_default();
-    if !already_local.contains(&model) {
-        return Err(format!(
-            "{model} is not downloaded yet - choose a model in Settings first"
-        ));
+    if is_ollama_model(&model) {
+        let host = ollama_host();
+        let local = ollama::list_local_models(&host).await.map_err(|_| {
+            "Ollama isn't running. Open the Ollama app, or switch to Apple Intelligence in Settings.".to_string()
+        })?;
+        if !local.contains(&model) {
+            return Err(format!("{model} is not downloaded yet - choose a model in Settings first"));
+        }
+    } else {
+        let helper = apple_helper(&app)?;
+        agent::apple_ai::availability(&helper)?;
     }
 
     agent::start(&app, &agent_state)
-}
-
-/// "Launch at login" registers a launchd plist pointing at the app's
-/// *current* path. If the app isn't in /Applications - still running from
-/// a mounted DMG or a Gatekeeper-translocated read-only copy - that path
-/// stops existing the moment the DMG is ejected, and the plist silently
-/// points at nothing. This is checked before enabling so the UI can warn
-/// instead of registering something that looks like it worked but won't
-/// actually run at next login.
-#[tauri::command]
-fn is_running_from_applications() -> bool {
-    std::env::current_exe()
-        .map(|p| p.starts_with("/Applications"))
-        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -253,6 +270,36 @@ fn is_agent_running(state: State<AgentProcess>) -> bool {
     agent::is_running(&state)
 }
 
+/// "Launch at login" registers a launchd plist pointing at the app's
+/// *current* path - warn before enabling from a DMG/translocated copy.
+#[tauri::command]
+fn is_running_from_applications() -> bool {
+    std::env::current_exe()
+        .map(|p| p.starts_with("/Applications"))
+        .unwrap_or(false)
+}
+
+/// Removes everything Life-Update stores on this machine: the local
+/// capture database + config (~/.life-update-agent) and the launch-at-login
+/// entry. Ollama models (if any were used) live in Ollama's own folder and
+/// are managed from the Ollama app.
+#[tauri::command]
+fn delete_local_data(state: State<AgentProcess>) -> Result<(), String> {
+    let _ = agent::stop(&state);
+
+    let dir = settings::state_dir();
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    if let Some(home) = dirs::home_dir() {
+        let plist = home.join("Library/LaunchAgents/Life-Update.plist");
+        if plist.exists() {
+            let _ = std::fs::remove_file(plist);
+        }
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -262,7 +309,6 @@ pub fn run() {
             None,
         ))
         .manage(AgentProcess(std::sync::Mutex::new(None)))
-        .manage(OllamaProcess::default())
         .invoke_handler(tauri::generate_handler![
             get_token_settings,
             save_token_settings,
@@ -279,9 +325,13 @@ pub fn run() {
             set_screen_watch_enabled,
             set_screen_capture_interval,
             agent_status,
+            recent_events,
+            recent_sessions,
+            session_events,
             start_agent,
             stop_agent,
             is_running_from_applications,
+            delete_local_data,
             is_agent_running,
         ])
         .setup(|app| {
@@ -296,26 +346,14 @@ pub fn run() {
                 &[&show_item, &separator, &start_item, &stop_item, &separator, &quit_item],
             )?;
 
-            // Only auto-resume on launch if a token was already saved from a
-            // previous session - otherwise this would spawn the daemon
-            // before onboarding writes LIFE_UPDATE_TOKEN to .env, and since
-            // start_agent() is a no-op once already running, the token
-            // would never get picked up until the user manually restarted it.
+            // Auto-resume only if a token was already saved from a previous
+            // session - never before onboarding has completed.
             let already_configured = settings::read_env_values(&settings::state_dir(), &["LIFE_UPDATE_TOKEN"])
                 .get("LIFE_UPDATE_TOKEN")
                 .is_some_and(|t| !t.is_empty());
             if already_configured {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    let ollama_state: State<OllamaProcess> = handle.state();
-                    let agent_state: State<AgentProcess> = handle.state();
-                    if ollama_process::ensure_server_running(&handle, &ollama_host(), &ollama_state)
-                        .await
-                        .is_ok()
-                    {
-                        agent::start(&handle, &agent_state).ok();
-                    }
-                });
+                let state: State<AgentProcess> = app.state();
+                let _ = agent::start(app.handle(), &state);
             }
 
             TrayIconBuilder::new()
@@ -330,29 +368,18 @@ pub fn run() {
                         }
                     }
                     "start" => {
-                        let handle = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let ollama_state: State<OllamaProcess> = handle.state();
-                            let agent_state: State<AgentProcess> = handle.state();
-                            if ollama_process::ensure_server_running(&handle, &ollama_host(), &ollama_state)
-                                .await
-                                .is_ok()
-                            {
-                                agent::start(&handle, &agent_state).ok();
-                            }
-                            let _ = handle.emit("agent-state-changed", true);
-                        });
+                        let state: State<AgentProcess> = app.state();
+                        let _ = agent::start(app, &state);
+                        let _ = app.emit("agent-state-changed", true);
                     }
                     "stop" => {
                         let state: State<AgentProcess> = app.state();
-                        agent::stop(&state).ok();
+                        let _ = agent::stop(&state);
                         let _ = app.emit("agent-state-changed", false);
                     }
                     "quit" => {
-                        let agent_state: State<AgentProcess> = app.state();
-                        let ollama_state: State<OllamaProcess> = app.state();
-                        agent::stop(&agent_state).ok();
-                        ollama_process::stop(&ollama_state);
+                        let state: State<AgentProcess> = app.state();
+                        let _ = agent::stop(&state);
                         app.exit(0);
                     }
                     _ => {}

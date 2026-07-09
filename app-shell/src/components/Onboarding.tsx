@@ -2,7 +2,9 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { usePullProgress, type PullProgress } from "../hooks/usePullProgress";
 
-const API_URL = "https://life-update.com";
+// www, not the apex: the apex 308-redirects and auth headers don't survive
+// cross-host redirects, which silently breaks sync.
+const API_URL = "https://www.life-update.com";
 
 interface ModelInfo {
   name: string;
