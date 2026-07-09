@@ -77,8 +77,9 @@ pub fn run_once(cfg: &AgentConfig) -> usize {
         SummaryEngine::Ollama { host: &cfg.ollama_host, model: &cfg.model }
     };
 
-    // Memory: this user's most recent summarized sessions, so the model
-    // can keep project names stable and describe continuation.
+    // Memory: this user's most recent summarized sessions from the LOCAL
+    // store - which the two-way sync keeps consistent with the web, so
+    // web-side edits and deletions are reflected here too.
     let related: Vec<RelatedSession> = super::recent_sessions(5)
         .unwrap_or_default()
         .into_iter()
@@ -117,6 +118,10 @@ pub fn run(cfg: Arc<AgentConfig>, frames: Arc<FrameQueue>, stop: Arc<AtomicBool>
         // reached life-update.com until the user stepped away for 3+
         // minutes. Only AI inference needs the idle/low-load gate.
         sync::sync_pending(&cfg.db_path, &cfg.api_url, &cfg.token);
+        // Two-way: pull web-side edits/deletions back into the local store
+        // on the same cadence, so the app (and the model's memory, which
+        // reads locally) always reflects what the user curated on the web.
+        sync::pull_remote_sessions(&cfg.db_path, &cfg.api_url, &cfg.token);
 
         if !idle::is_safe_to_run_inference(cfg.idle_threshold_minutes, cfg.cpu_load_ceiling_percent) {
             continue;

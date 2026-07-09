@@ -103,3 +103,77 @@ pub fn sync_pending(db_path: &Path, api_url: &str, token: &str) -> usize {
     }
     sent
 }
+
+/// Down-sync: reconcile the local session store against the server so the
+/// two sides agree. Sessions edited on the web get their local copies
+/// updated; sessions deleted on the web get deleted locally. Only rows
+/// that have already been sent are touched (unsent rows haven't reached
+/// the web yet), and deletion is bounded to the window the server actually
+/// returned so old local history is never mass-deleted by a short feed.
+pub fn pull_remote_sessions(db_path: &Path, api_url: &str, token: &str) {
+    if token.is_empty() {
+        return;
+    }
+    let Ok(client) = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+    else {
+        return;
+    };
+    let Ok(resp) = client
+        .get(format!("{}/api/portfolio-events?limit=200", api_url.trim_end_matches('/')))
+        .bearer_auth(token)
+        .send()
+    else {
+        return;
+    };
+    if !resp.status().is_success() {
+        return;
+    }
+    let Ok(body) = resp.json::<serde_json::Value>() else { return };
+    let Some(events) = body.get("events").and_then(|v| v.as_array()) else { return };
+
+    let Ok(conn) = db::open(db_path) else { return };
+
+    let mut server_ids = std::collections::HashSet::new();
+    let mut window_min: Option<String> = None;
+    for e in events {
+        let (Some(id), Some(project), Some(category), Some(summary), Some(started_at)) = (
+            e.get("id").and_then(|v| v.as_str()),
+            e.get("project").and_then(|v| v.as_str()),
+            e.get("category").and_then(|v| v.as_str()),
+            e.get("summary").and_then(|v| v.as_str()),
+            e.get("startedAt").and_then(|v| v.as_str()),
+        ) else {
+            continue;
+        };
+        let focus = e.get("focusScore").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        server_ids.insert(id.to_string());
+        if window_min.as_deref().map(|m| started_at < m).unwrap_or(true) {
+            window_min = Some(started_at.to_string());
+        }
+        let _ = conn.execute(
+            "UPDATE portfolio_event_queue SET project = ?1, category = ?2, summary = ?3, focus_score = ?4 WHERE id = ?5",
+            rusqlite::params![project, category, summary, focus, id],
+        );
+    }
+
+    // Deletions: any *sent* local row inside the server's window that the
+    // server no longer returns was deleted on the web.
+    let Some(window_min) = window_min else { return };
+    let local_ids: Vec<String> = {
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT id FROM portfolio_event_queue WHERE sent_at IS NOT NULL AND started_at >= ?1",
+        ) else {
+            return;
+        };
+        stmt.query_map([&window_min], |r| r.get::<_, String>(0))
+            .map(|rows| rows.filter_map(Result::ok).collect())
+            .unwrap_or_default()
+    };
+    for id in local_ids {
+        if !server_ids.contains(&id) {
+            let _ = conn.execute("DELETE FROM portfolio_event_queue WHERE id = ?1", rusqlite::params![id]);
+        }
+    }
+}

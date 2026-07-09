@@ -10,7 +10,6 @@ import {
   FileText,
   GitCommit,
   Monitor,
-  Sparkle,
 } from "@phosphor-icons/react";
 
 interface AgentStatus {
@@ -274,7 +273,6 @@ export function Home() {
             disabled={summarizing}
             className="flex items-center gap-2 border border-primary/30 text-primary rounded-xl px-4 py-2 text-sm font-medium hover:bg-primary/5 transition-colors disabled:opacity-60"
           >
-            <Sparkle size={14} weight="bold" className={summarizing ? "animate-pulse" : ""} />
             {summarizing ? "Summarizing on-device…" : "Summarize now"}
           </button>
           {summarizeResult && <p className="text-xs text-muted-foreground">{summarizeResult}</p>}
