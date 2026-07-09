@@ -33,10 +33,24 @@ export function Settings() {
   const [screenInterval, setScreenInterval] = useState(120);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [engineError, setEngineError] = useState<string | null>(null);
+  const [account, setAccount] = useState<{ username: string | null; name: string | null } | null>(null);
+  const [accountUnverified, setAccountUnverified] = useState(false);
 
   useEffect(() => {
     isAutostartEnabled().then(setAutostart).catch(() => {});
+    invoke<{ username: string | null; name: string | null }>("get_connected_account")
+      .then(setAccount)
+      .catch(() => setAccountUnverified(true));
   }, []);
+
+  async function disconnect() {
+    try {
+      await invoke("disconnect_device");
+      window.location.reload(); // token cleared - back to onboarding
+    } catch (e) {
+      setEngineError(String(e));
+    }
+  }
 
   async function toggleAutostart() {
     setAutostartError(null);
@@ -186,6 +200,29 @@ export function Settings() {
   return (
     <div className="max-w-2xl mx-auto px-6 py-8 space-y-6">
       <h1 className="text-lg font-semibold text-foreground">Settings</h1>
+
+      <div className="glass rounded-2xl p-4 flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-foreground">
+            {account?.username
+              ? `Connected as @${account.username}`
+              : account?.name
+                ? `Connected as ${account.name}`
+                : accountUnverified
+                  ? "Connected (couldn't verify right now)"
+                  : "Checking connection…"}
+          </p>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Sessions sync to this life-update.com account
+          </p>
+        </div>
+        <button
+          onClick={disconnect}
+          className="text-sm font-medium text-muted-foreground hover:text-destructive border border-black/8 rounded-xl px-3.5 py-2 transition-colors"
+        >
+          Disconnect
+        </button>
+      </div>
 
       <div className="glass rounded-2xl p-4 space-y-2">
         <label className="flex items-center justify-between cursor-pointer">

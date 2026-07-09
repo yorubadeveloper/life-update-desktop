@@ -23,6 +23,7 @@ export function Onboarding({ onConnected }: { onConnected: () => void }) {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [pulling, setPulling] = useState<string | null>(null);
   const [pullProgress, setPullProgress] = useState<PullProgress | null>(null);
+  const [connectedAs, setConnectedAs] = useState<string | null>(null);
 
   usePullProgress((p) => {
     if (pulling) setPullProgress(p);
@@ -36,7 +37,14 @@ export function Onboarding({ onConnected }: { onConnected: () => void }) {
     setSaving(true);
     setError(null);
     try {
+      // Verify against life-update.com BEFORE saving anything - an invalid
+      // token fails right here with a clear message, not at first sync.
+      const account = await invoke<{ username: string | null; name: string | null }>(
+        "verify_token",
+        { token: token.trim() }
+      );
       await invoke("save_token_settings", { token: token.trim(), apiUrl: API_URL });
+      setConnectedAs(account.username ?? account.name ?? null);
       const list = await invoke<ModelInfo[]>("list_models");
       setModels(list);
       setStep("model");
@@ -76,6 +84,11 @@ export function Onboarding({ onConnected }: { onConnected: () => void }) {
       <div className="min-h-screen flex items-center justify-center p-8">
         <div className="glass rounded-2xl p-8 max-w-md w-full space-y-5">
           <div>
+            {connectedAs && (
+              <p className="text-sm font-medium text-primary mb-2">
+                ✓ Connected as @{connectedAs}
+              </p>
+            )}
             <h1 className="text-xl font-semibold text-foreground">Choose a local model</h1>
             <p className="text-sm text-muted-foreground mt-1">
               Runs entirely on this machine to summarize your activity into sessions. Nothing

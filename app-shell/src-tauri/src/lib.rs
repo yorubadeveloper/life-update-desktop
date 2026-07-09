@@ -48,6 +48,68 @@ fn apple_helper(app: &AppHandle) -> Result<std::path::PathBuf, String> {
         .map_err(|e| e.to_string())
 }
 
+#[derive(Serialize, serde::Deserialize)]
+struct VerifiedAccount {
+    username: Option<String>,
+    name: Option<String>,
+}
+
+fn api_url() -> String {
+    settings::read_env_values(&settings::state_dir(), &["LIFE_UPDATE_API_URL"])
+        .get("LIFE_UPDATE_API_URL")
+        .cloned()
+        .unwrap_or_else(|| "https://www.life-update.com".to_string())
+}
+
+async fn verify_token_inner(api: &str, token: &str) -> Result<VerifiedAccount, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(format!("{}/api/device", api.trim_end_matches('/')))
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|_| "Couldn't reach life-update.com - check your connection and try again.".to_string())?;
+
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
+        return Err("That token isn't valid. Generate a fresh one at life-update.com → Settings → Devices.".to_string());
+    }
+    if !resp.status().is_success() {
+        return Err(format!("life-update.com returned an error ({})", resp.status()));
+    }
+    resp.json::<VerifiedAccount>()
+        .await
+        .map_err(|_| "Unexpected response from life-update.com".to_string())
+}
+
+/// Validates a pasted token against life-update.com BEFORE anything is
+/// saved - onboarding refuses to proceed on an invalid token instead of
+/// silently failing at first sync.
+#[tauri::command]
+async fn verify_token(token: String) -> Result<VerifiedAccount, String> {
+    verify_token_inner(&api_url(), token.trim()).await
+}
+
+#[tauri::command]
+async fn get_connected_account() -> Result<VerifiedAccount, String> {
+    let token = settings::read_env_values(&settings::state_dir(), &["LIFE_UPDATE_TOKEN"])
+        .get("LIFE_UPDATE_TOKEN")
+        .cloned()
+        .unwrap_or_default();
+    if token.is_empty() {
+        return Err("not connected".to_string());
+    }
+    verify_token_inner(&api_url(), &token).await
+}
+
+#[tauri::command]
+fn disconnect_device(state: State<AgentProcess>) -> Result<(), String> {
+    let _ = agent::stop(&state);
+    settings::write_env_values(&settings::state_dir(), &[("LIFE_UPDATE_TOKEN", "")])
+}
+
 #[tauri::command]
 fn get_token_settings() -> TokenSettings {
     let values = settings::read_env_values(&settings::state_dir(), &["LIFE_UPDATE_TOKEN", "LIFE_UPDATE_API_URL"]);
@@ -312,6 +374,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_token_settings,
             save_token_settings,
+            verify_token,
+            get_connected_account,
+            disconnect_device,
             get_exclude_list,
             add_exclude_app,
             remove_exclude_app,
