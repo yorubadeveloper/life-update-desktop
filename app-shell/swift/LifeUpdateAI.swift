@@ -21,7 +21,7 @@ func fail(_ message: String, code: Int32 = 1) -> Never {
 }
 
 let PROMPT_HEADER = """
-You are summarizing a developer's work session from redacted activity logs.
+You are summarizing a user's work session from redacted activity logs.
 Respond with ONLY a JSON object with exactly these keys:
 - "project": a short (2-6 word) name for what they were working on
 - "category": one of "deep_work", "maintenance", "meeting", "other"
@@ -71,7 +71,7 @@ struct LifeUpdateAI {
         }
 
         let session = LanguageModelSession(
-            instructions: "You summarize a developer's work session from redacted activity logs into a changelog-style record. You always answer with a single JSON object and nothing else."
+            instructions: "You summarize a user's work session from redacted activity logs into a changelog-style record. You always answer with a single JSON object and nothing else. Never include personal names, email addresses, usernames, or any other personally identifying details in your output - describe the work, not the people."
         )
 
         do {

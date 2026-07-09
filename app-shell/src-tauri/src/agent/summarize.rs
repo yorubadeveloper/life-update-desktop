@@ -11,11 +11,13 @@ use std::path::Path;
 
 const VALID_CATEGORIES: &[&str] = &["deep_work", "maintenance", "meeting", "other"];
 
-const OLLAMA_PROMPT_TEMPLATE: &str = r#"You are summarizing a developer's work session from redacted activity logs.
+const OLLAMA_PROMPT_TEMPLATE: &str = r#"You are summarizing a user's work session from redacted activity logs.
 Respond with ONLY a JSON object with exactly these keys:
 - "project": a short (2-6 word) name for what they were working on
 - "category": one of "deep_work", "maintenance", "meeting", "other"
 - "summary": one or two plain sentences describing what was done, written like a changelog entry
+
+Never include personal names, email addresses, usernames, or any other personally identifying details in your output - describe the work, not the people.
 
 Activity log:
 {activity}
