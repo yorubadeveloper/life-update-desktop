@@ -194,7 +194,7 @@ export function Home() {
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             {running
-              ? "Capturing locally. Summaries happen when you step away."
+              ? "Capturing locally. Queued events are summarized and synced automatically once you've been away from the keyboard for ~3 minutes."
               : "Nothing is being captured right now."}
           </p>
         </div>
@@ -217,7 +217,7 @@ export function Home() {
           </div>
           <div className="glass rounded-2xl p-4">
             <p className="text-2xl font-semibold text-foreground">{status.unprocessed_raw_events}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">waiting for idle</p>
+            <p className="text-xs text-muted-foreground mt-0.5">queued for summary</p>
           </div>
           <div className="glass rounded-2xl p-4">
             <p className="text-2xl font-semibold text-foreground">{status.total_synced_portfolio_events}</p>

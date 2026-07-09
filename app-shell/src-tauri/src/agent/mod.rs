@@ -47,6 +47,11 @@ pub struct AgentConfig {
 
 /// The first safety layer - checked before anything is captured.
 pub fn is_excluded(cfg: &AgentConfig, app_name: Option<&str>, window_title: Option<&str>) -> bool {
+    // Never track ourselves - time spent in the Life-Update settings window
+    // is meta-noise, not the user's work.
+    if app_name == Some("Life-Update") || app_name == Some("app-shell") {
+        return true;
+    }
     if let Some(app) = app_name {
         let lowered = app.to_lowercase();
         if cfg.exclude_apps.iter().any(|e| lowered.contains(&e.to_lowercase())) {
@@ -131,10 +136,13 @@ fn load_config(app: &AppHandle) -> AgentConfig {
             .get("IDLE_THRESHOLD_MINUTES")
             .and_then(|v| v.parse().ok())
             .unwrap_or(3.0),
+        // 50, not the old 30: on machines that hover above 30% CPU even
+        // when the user is away, a 30% ceiling meant summaries never ran
+        // at all - sessions piled up as "queued" forever.
         cpu_load_ceiling_percent: env
             .get("CPU_LOAD_CEILING_PERCENT")
             .and_then(|v| v.parse().ok())
-            .unwrap_or(30.0),
+            .unwrap_or(50.0),
         helper_path,
     }
 }

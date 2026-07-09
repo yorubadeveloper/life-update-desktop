@@ -140,7 +140,7 @@ exclude-list, screen watching - managed by the UI) and `.env`:
 | `OLLAMA_HOST` | Defaults to `http://localhost:11434` (only used with an Ollama engine) |
 | `WATCH_DIRS` | Comma-separated project directories to watch for file/git activity |
 | `IDLE_THRESHOLD_MINUTES` | Idle time before the inference worker runs (default 3) |
-| `CPU_LOAD_CEILING_PERCENT` | CPU ceiling the worker also waits under (default 30) |
+| `CPU_LOAD_CEILING_PERCENT` | CPU ceiling the worker also waits under (default 50) |
 
 ### The Apple Intelligence helper
 
