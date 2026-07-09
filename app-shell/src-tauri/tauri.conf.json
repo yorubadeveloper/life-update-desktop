@@ -14,8 +14,11 @@
     "windows": [
       {
         "title": "Life-Update",
-        "width": 480,
-        "height": 720
+        "width": 1080,
+        "height": 760,
+        "minWidth": 760,
+        "minHeight": 560,
+        "center": true
       }
     ],
     "security": {
