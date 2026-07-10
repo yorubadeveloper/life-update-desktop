@@ -323,6 +323,7 @@ pub struct SessionView {
     pub apps_used: Vec<String>,
     pub summary: String,
     pub sent_at: Option<String>,
+    pub held: bool,
 }
 
 pub fn recent_sessions(limit: u32) -> Result<Vec<SessionView>, String> {
@@ -333,7 +334,7 @@ pub fn recent_sessions(limit: u32) -> Result<Vec<SessionView>, String> {
     let conn = rusqlite::Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| e.to_string())?;
     let mut stmt = conn
-        .prepare("SELECT id, started_at, ended_at, project, category, focus_score, apps_used_json, summary, sent_at FROM portfolio_event_queue ORDER BY created_at DESC LIMIT ?1")
+        .prepare("SELECT id, started_at, ended_at, project, category, focus_score, apps_used_json, summary, sent_at, COALESCE(held,0) FROM portfolio_event_queue ORDER BY created_at DESC LIMIT ?1")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([limit], |r| {
@@ -348,6 +349,7 @@ pub fn recent_sessions(limit: u32) -> Result<Vec<SessionView>, String> {
                 apps_used: serde_json::from_str(&apps_json).unwrap_or_default(),
                 summary: r.get(7)?,
                 sent_at: r.get(8)?,
+                held: r.get::<_, i64>(9)? != 0,
             })
         })
         .map_err(|e| e.to_string())?
@@ -355,6 +357,24 @@ pub fn recent_sessions(limit: u32) -> Result<Vec<SessionView>, String> {
         .collect();
     Ok(rows)
 }
+
+/// Release a held session for syncing (next 60s tick sends it).
+pub fn release_session(id: &str) -> Result<(), String> {
+    let conn = db::open(&settings::state_dir().join("agent.db")).map_err(|e| e.to_string())?;
+    conn.execute("UPDATE portfolio_event_queue SET held = 0 WHERE id = ?1", rusqlite::params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Discard a held session entirely.
+pub fn discard_session(id: &str) -> Result<(), String> {
+    let conn = db::open(&settings::state_dir().join("agent.db")).map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM portfolio_event_queue WHERE id = ?1 AND sent_at IS NULL", rusqlite::params![id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub use idle::{has_screen_recording_permission, request_screen_recording_permission};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct AgentStatus {

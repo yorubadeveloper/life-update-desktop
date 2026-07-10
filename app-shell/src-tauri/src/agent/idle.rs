@@ -37,6 +37,20 @@ pub fn is_safe_to_run_inference(idle_threshold_minutes: f64, cpu_load_ceiling_pe
     is_user_idle(idle_threshold_minutes) && is_load_low(cpu_load_ceiling_percent)
 }
 
+/// Preflight only - no prompt. Screen Recording gates BOTH window titles
+/// (CGWindowList omits kCGWindowName without it) and screen capture, so
+/// without it the agent only ever sees bare app names - the root cause of
+/// guesswork summaries.
+pub fn has_screen_recording_permission() -> bool {
+    unsafe { CGPreflightScreenCaptureAccess() }
+}
+
+/// Actively requests the permission (triggers the system prompt). macOS
+/// requires an app relaunch after granting for it to take effect.
+pub fn request_screen_recording_permission() -> bool {
+    unsafe { CGRequestScreenCaptureAccess() }
+}
+
 /// True if macOS Screen Recording permission is granted; if not, actively
 /// requests it (which triggers the system prompt) before returning false.
 pub fn ensure_screen_recording_permission() -> bool {

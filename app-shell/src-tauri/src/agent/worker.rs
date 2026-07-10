@@ -55,6 +55,13 @@ pub fn process_pending_frames(cfg: &AgentConfig, frames: &FrameQueue) {
     }
 }
 
+/// The gate that keeps guesswork off the timeline: a project named after
+/// one of the apps used means the model had nothing real to go on.
+pub fn project_is_tool_named(project: &str, apps: &[String]) -> bool {
+    let p = project.trim().to_lowercase();
+    p == "untitled session" || apps.iter().any(|a| a.trim().to_lowercase() == p)
+}
+
 /// One inference pass; returns sessions processed. The machine has been
 /// idle past the threshold, so everything fetched belongs to a *completed*
 /// period of activity - sessions dropped as too short are genuinely noise
@@ -80,17 +87,33 @@ pub fn run_once(cfg: &AgentConfig) -> usize {
     // Memory: this user's most recent summarized sessions from the LOCAL
     // store - which the two-way sync keeps consistent with the web, so
     // web-side edits and deletions are reflected here too.
-    let related: Vec<RelatedSession> = super::recent_sessions(5)
+    let related: Vec<RelatedSession> = super::recent_sessions(10)
         .unwrap_or_default()
         .into_iter()
+        .filter(|s| !s.held) // never feed held guesswork back as memory
+        .take(5)
         .map(|s| RelatedSession { project: s.project, summary: s.summary, ended_at: s.ended_at })
         .collect();
 
     let mut processed = 0;
     for session in &sessions {
-        match summarize_session(session, &engine, &related) {
-            Some(draft) => {
-                sync::enqueue(&cfg.db_path, &draft);
+        match summarize_session(session, &engine, &related, None) {
+            Some(mut draft) => {
+                // Quality gate: tool-named project = the model was guessing.
+                // One corrective retry; if still guessing, HOLD it locally
+                // for review instead of syncing guesswork to the timeline.
+                let mut held = false;
+                if project_is_tool_named(&draft.project, &draft.apps_used) {
+                    let correction = format!(
+                        "The previous attempt named the project \"{}\" - that is a tool or placeholder, never a project. Look again at titles, files and commits for the real name; if none is visible, use a short plain description of the activity instead.",
+                        draft.project
+                    );
+                    if let Some(second) = summarize_session(session, &engine, &related, Some(&correction)) {
+                        draft = second;
+                    }
+                    held = project_is_tool_named(&draft.project, &draft.apps_used);
+                }
+                sync::enqueue(&cfg.db_path, &draft, held);
                 let ids: Vec<i64> = session.iter().map(|e| e.id).collect();
                 db::mark_processed(&cfg.db_path, &ids);
                 processed += 1;
@@ -136,5 +159,19 @@ pub fn run(cfg: Arc<AgentConfig>, frames: Arc<FrameQueue>, stop: Arc<AtomicBool>
             log::info!("inference pass processed {count} session(s)");
             sync::sync_pending(&cfg.db_path, &cfg.api_url, &cfg.token);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project_is_tool_named;
+
+    #[test]
+    fn tool_named_projects_are_caught() {
+        let apps = vec!["Warp".to_string(), "Google Chrome".to_string()];
+        assert!(project_is_tool_named("Warp", &apps));
+        assert!(project_is_tool_named("google chrome", &apps));
+        assert!(project_is_tool_named("Untitled session", &apps));
+        assert!(!project_is_tool_named("AcornTracker", &apps));
     }
 }

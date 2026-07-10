@@ -10,7 +10,7 @@ use uuid::Uuid;
 // rewrite and the server-side upsert dedupes correctly.
 const DEVICE_ID_NAMESPACE: Uuid = Uuid::from_u128(0x6f7f9e2c_6c1a_4c2b_9a1e_3d6b6c2f9a11);
 
-pub fn enqueue(db_path: &Path, draft: &super::summarize::PortfolioEventDraft) {
+pub fn enqueue(db_path: &Path, draft: &super::summarize::PortfolioEventDraft, held: bool) {
     let event_id = Uuid::new_v5(
         &DEVICE_ID_NAMESPACE,
         format!("{}:{}", draft.started_at, draft.ended_at).as_bytes(),
@@ -20,8 +20,8 @@ pub fn enqueue(db_path: &Path, draft: &super::summarize::PortfolioEventDraft) {
     if let Ok(conn) = db::open(db_path) {
         let _ = conn.execute(
             "INSERT INTO portfolio_event_queue
-             (id, started_at, ended_at, project, category, focus_score, apps_used_json, summary, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             (id, started_at, ended_at, project, category, focus_score, apps_used_json, summary, created_at, held)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(id) DO NOTHING",
             rusqlite::params![
                 event_id,
@@ -33,6 +33,7 @@ pub fn enqueue(db_path: &Path, draft: &super::summarize::PortfolioEventDraft) {
                 serde_json::to_string(&draft.apps_used).unwrap_or_else(|_| "[]".into()),
                 draft.summary,
                 db::now_iso(),
+                held as i64,
             ],
         );
     }
@@ -46,7 +47,7 @@ pub fn sync_pending(db_path: &Path, api_url: &str, token: &str) -> usize {
     let rows: Vec<(String, String, String, String, String, f64, String, String)> = {
         let Ok(mut stmt) = conn.prepare(
             "SELECT id, started_at, ended_at, project, category, focus_score, apps_used_json, summary
-             FROM portfolio_event_queue WHERE sent_at IS NULL ORDER BY created_at ASC",
+             FROM portfolio_event_queue WHERE sent_at IS NULL AND held = 0 ORDER BY created_at ASC",
         ) else {
             return 0;
         };

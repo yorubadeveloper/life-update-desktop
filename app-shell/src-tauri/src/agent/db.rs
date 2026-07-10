@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS portfolio_event_queue (
     apps_used_json TEXT NOT NULL,
     summary TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    sent_at TEXT
+    sent_at TEXT,
+    held INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_queue_unsent ON portfolio_event_queue (sent_at);
 ";
@@ -40,6 +41,8 @@ pub fn open(db_path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(db_path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.execute_batch(SCHEMA)?;
+    // Migration for stores created before the quality gate existed.
+    let _ = conn.execute("ALTER TABLE portfolio_event_queue ADD COLUMN held INTEGER NOT NULL DEFAULT 0", []);
     Ok(conn)
 }
 

@@ -208,13 +208,18 @@ pub fn summarize_session(
     session: &[RawEvent],
     engine: &SummaryEngine,
     related: &[RelatedSession],
+    correction: Option<&str>,
 ) -> Option<PortfolioEventDraft> {
     let activity = build_session_text(session);
     if activity.is_empty() {
         return None;
     }
     let activity = condense_if_needed(activity, engine);
-    let document = build_prompt_document(related, &activity);
+    let mut document = build_prompt_document(related, &activity);
+    if let Some(c) = correction {
+        document.push_str("\n\n[CORRECTION] ");
+        document.push_str(c);
+    }
 
     let (project, category, summary) = match engine {
         SummaryEngine::Apple { helper } => match apple_ai::summarize(helper, &document) {

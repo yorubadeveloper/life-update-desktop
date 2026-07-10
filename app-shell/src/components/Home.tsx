@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Play,
   Pause,
@@ -10,6 +11,8 @@ import {
   FileText,
   GitCommit,
   Monitor,
+  Warning,
+  ArrowClockwise,
 } from "@phosphor-icons/react";
 
 interface AgentStatus {
@@ -30,6 +33,7 @@ interface SessionView {
   apps_used: string[];
   summary: string;
   sent_at: string | null;
+  held: boolean;
 }
 
 interface RawEventView {
@@ -93,9 +97,19 @@ function timeRange(start: string, end: string): string {
   return `${new Date(start).toLocaleDateString([], { month: "short", day: "numeric" })} · ${fmt(start)}–${fmt(end)}`;
 }
 
-function SessionCard({ session }: { session: SessionView }) {
+function SessionCard({ session, onChanged }: { session: SessionView; onChanged: () => void }) {
   const [open, setOpen] = useState(false);
   const [events, setEvents] = useState<RawEventView[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function release() {
+    setBusy(true);
+    try { await invoke("release_session", { id: session.id }); onChanged(); } finally { setBusy(false); }
+  }
+  async function discard() {
+    setBusy(true);
+    try { await invoke("discard_session", { id: session.id }); onChanged(); } finally { setBusy(false); }
+  }
 
   async function toggle() {
     const next = !open;
@@ -125,6 +139,28 @@ function SessionCard({ session }: { session: SessionView }) {
           </span>
         </div>
         <p className="text-sm text-muted-foreground">{session.summary}</p>
+        {session.held && (
+          <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-2.5 py-1.5 mt-1">
+            <Warning size={13} className="text-amber-600 shrink-0" />
+            <span className="text-[11px] text-amber-700 flex-1">
+              Held - this looks like a guess (no real project name found), so it wasn't synced.
+            </span>
+            <button
+              onClick={(e) => { e.stopPropagation(); release(); }}
+              disabled={busy}
+              className="text-[11px] font-medium text-amber-800 underline underline-offset-2 disabled:opacity-50"
+            >
+              Sync anyway
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); discard(); }}
+              disabled={busy}
+              className="text-[11px] font-medium text-amber-800 underline underline-offset-2 disabled:opacity-50"
+            >
+              Discard
+            </button>
+          </div>
+        )}
         <div className="flex items-center gap-2 pt-0.5">
           <span className={`text-[11px] px-2 py-0.5 rounded-full ${CATEGORY_STYLES[session.category] ?? CATEGORY_STYLES.other}`}>
             {CATEGORY_LABELS[session.category] ?? session.category}
@@ -175,8 +211,23 @@ export function Home() {
   const [error, setError] = useState<string | null>(null);
   const [summarizing, setSummarizing] = useState(false);
   const [summarizeResult, setSummarizeResult] = useState<string | null>(null);
+  const [screenPermission, setScreenPermission] = useState<boolean | null>(null);
+  const [permissionRequested, setPermissionRequested] = useState(false);
+
+  async function grantPermission() {
+    setPermissionRequested(true);
+    const granted = await invoke<boolean>("request_screen_permission").catch(() => false);
+    if (!granted) {
+      // The OS prompt only fires once; from then on it's manual.
+      await openUrl(
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+      ).catch(() => {});
+    }
+    invoke<boolean>("screen_permission_status").then(setScreenPermission).catch(() => {});
+  }
 
   const refresh = useCallback(() => {
+    invoke<boolean>("screen_permission_status").then(setScreenPermission).catch(() => {});
     invoke<boolean>("is_agent_running").then(setRunning).catch(() => {});
     invoke<AgentStatus>("agent_status").then(setStatus).catch(() => {});
     invoke<SessionView[]>("recent_sessions", { limit: 20 }).then(setSessions).catch(() => {});
@@ -246,6 +297,43 @@ export function Home() {
 
       {error && <p className="text-sm text-destructive">{error}</p>}
 
+      {screenPermission === false && (
+        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 space-y-3">
+          <div className="flex items-start gap-3">
+            <Warning size={20} weight="fill" className="text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-foreground">
+                Life-Update can't see what you're working on yet
+              </p>
+              <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+                Without macOS <span className="font-medium">Screen Recording</span> permission,
+                the app only sees app names - "PyCharm", not{" "}
+                <span className="italic">which project</span> - so summaries can only guess. The
+                permission unlocks window titles and (if enabled) on-screen text. Everything
+                stays on this Mac.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3 pl-8">
+            <button
+              onClick={grantPermission}
+              className="bg-amber-600 text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-amber-700 transition-colors"
+            >
+              {permissionRequested ? "Open Screen Recording settings" : "Grant permission"}
+            </button>
+            {permissionRequested && (
+              <button
+                onClick={() => invoke("restart_app")}
+                className="flex items-center gap-1.5 text-sm font-medium text-amber-800 hover:text-amber-900"
+              >
+                <ArrowClockwise size={14} weight="bold" />
+                I've enabled it - restart the app
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {status && (
         <div className="grid grid-cols-3 gap-3">
           <div className="glass rounded-2xl p-4">
@@ -299,7 +387,7 @@ export function Home() {
             </p>
           </div>
         ) : (
-          sessions.map((s) => <SessionCard key={s.id} session={s} />)
+          sessions.map((s) => <SessionCard key={s.id} session={s} onChanged={refresh} />)
         )}
       </div>
     </div>

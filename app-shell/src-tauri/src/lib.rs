@@ -354,6 +354,26 @@ async fn summarize_now(state: State<'_, AgentProcess>) -> Result<usize, String> 
 }
 
 #[tauri::command]
+fn screen_permission_status() -> bool {
+    agent::has_screen_recording_permission()
+}
+
+#[tauri::command]
+fn request_screen_permission() -> bool {
+    agent::request_screen_recording_permission()
+}
+
+#[tauri::command]
+fn release_session(id: String) -> Result<(), String> {
+    agent::release_session(&id)
+}
+
+#[tauri::command]
+fn discard_session(id: String) -> Result<(), String> {
+    agent::discard_session(&id)
+}
+
+#[tauri::command]
 fn restart_app(app: AppHandle) {
     app.restart();
 }
@@ -451,6 +471,10 @@ pub fn run() {
             recent_sessions,
             session_events,
             summarize_now,
+            screen_permission_status,
+            request_screen_permission,
+            release_session,
+            discard_session,
             start_agent,
             stop_agent,
             is_running_from_applications,
