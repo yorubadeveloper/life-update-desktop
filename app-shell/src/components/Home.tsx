@@ -212,10 +212,8 @@ export function Home() {
   const [summarizing, setSummarizing] = useState(false);
   const [summarizeResult, setSummarizeResult] = useState<string | null>(null);
   const [screenPermission, setScreenPermission] = useState<boolean | null>(null);
-  const [permissionRequested, setPermissionRequested] = useState(false);
 
   async function grantPermission() {
-    setPermissionRequested(true);
     const granted = await invoke<boolean>("request_screen_permission").catch(() => false);
     if (!granted) {
       // The OS prompt only fires once; from then on it's manual.
@@ -298,60 +296,33 @@ export function Home() {
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       {screenPermission === false && (
-        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 space-y-3">
-          <div className="flex items-start gap-3">
-            <Warning size={20} weight="fill" className="text-amber-600 shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-semibold text-foreground">
-                Life-Update can't see what you're working on yet
-              </p>
-              <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
-                Without macOS <span className="font-medium">Screen Recording</span> permission,
-                the app only sees app names - "PyCharm", not{" "}
-                <span className="italic">which project</span> - so summaries can only guess. The
-                permission unlocks window titles and (if enabled) on-screen text. Everything
-                stays on this Mac.
-              </p>
-              <p className="text-xs text-muted-foreground mt-2">
-                Already enabled in System Settings but still seeing this? Toggle Life-Update
-                off and back on there, then restart the app - macOS ties the permission to the
-                exact app build and needs a relaunch.
-              </p>
+        <div className="glass rounded-2xl p-5 flex items-start gap-4 border border-amber-500/25">
+          <div className="w-9 h-9 rounded-xl bg-amber-500/15 flex items-center justify-center shrink-0">
+            <Warning size={18} weight="fill" className="text-amber-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-foreground">Sessions can't see your work yet</p>
+            <p className="text-sm text-muted-foreground mt-1 leading-relaxed">
+              Grant Screen Recording so Life-Update can read window titles - which project
+              you're in, not just which app. Everything stays on this Mac.
+            </p>
+            <div className="flex items-center gap-2.5 mt-3.5">
+              <button
+                onClick={grantPermission}
+                className="bg-primary text-primary-foreground rounded-xl px-4 py-2 text-sm font-medium hover:bg-accent transition-colors"
+              >
+                Grant permission
+              </button>
+              <button
+                onClick={() => invoke("restart_app")}
+                className="flex items-center gap-1.5 border border-black/10 text-foreground rounded-xl px-4 py-2 text-sm font-medium hover:bg-black/5 transition-colors"
+              >
+                <ArrowClockwise size={14} />
+                Restart app
+              </button>
             </div>
-          </div>
-          <div className="flex items-center gap-3 pl-8">
-            <button
-              onClick={grantPermission}
-              className="bg-amber-600 text-white rounded-xl px-4 py-2 text-sm font-medium hover:bg-amber-700 transition-colors"
-            >
-              {permissionRequested ? "Open Screen Recording settings" : "Grant permission"}
-            </button>
-            <button
-              onClick={() => invoke("restart_app")}
-              className="flex items-center gap-1.5 text-sm font-medium text-amber-800 hover:text-amber-900"
-            >
-              <ArrowClockwise size={14} weight="bold" />
-              I've enabled it - restart the app
-            </button>
-          </div>
-        </div>
-      )}
-
-      {status && (
-        <div className="grid grid-cols-3 gap-3">
-          <div className="glass rounded-2xl p-4">
-            <p className="text-2xl font-semibold text-foreground">{status.total_captured_events}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">events captured</p>
-          </div>
-          <div className="glass rounded-2xl p-4">
-            <p className="text-2xl font-semibold text-foreground">{status.unprocessed_raw_events}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">queued for summary</p>
-          </div>
-          <div className="glass rounded-2xl p-4">
-            <p className="text-2xl font-semibold text-foreground">{status.total_synced_portfolio_events}</p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              sessions synced
-              {status.unsent_portfolio_events > 0 && ` · ${status.unsent_portfolio_events} pending`}
+            <p className="text-[11px] text-muted-foreground mt-3">
+              Already granted? Toggle Life-Update off and on in System Settings, then restart.
             </p>
           </div>
         </div>
