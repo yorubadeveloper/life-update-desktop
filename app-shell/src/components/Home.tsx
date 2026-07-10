@@ -312,6 +312,11 @@ export function Home() {
                 permission unlocks window titles and (if enabled) on-screen text. Everything
                 stays on this Mac.
               </p>
+              <p className="text-xs text-muted-foreground mt-2">
+                Already enabled in System Settings but still seeing this? Toggle Life-Update
+                off and back on there, then restart the app - macOS ties the permission to the
+                exact app build and needs a relaunch.
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-3 pl-8">
@@ -321,15 +326,13 @@ export function Home() {
             >
               {permissionRequested ? "Open Screen Recording settings" : "Grant permission"}
             </button>
-            {permissionRequested && (
-              <button
-                onClick={() => invoke("restart_app")}
-                className="flex items-center gap-1.5 text-sm font-medium text-amber-800 hover:text-amber-900"
-              >
-                <ArrowClockwise size={14} weight="bold" />
-                I've enabled it - restart the app
-              </button>
-            )}
+            <button
+              onClick={() => invoke("restart_app")}
+              className="flex items-center gap-1.5 text-sm font-medium text-amber-800 hover:text-amber-900"
+            >
+              <ArrowClockwise size={14} weight="bold" />
+              I've enabled it - restart the app
+            </button>
           </div>
         </div>
       )}

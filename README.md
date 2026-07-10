@@ -158,6 +158,27 @@ On Macs where Apple Intelligence is unavailable (pre-26 macOS, Intel, or
 not enabled in System Settings), the helper reports why, the UI surfaces
 it, and the Ollama engines remain as the alternative.
 
+### Signing identity (required to build)
+
+Builds are signed with a local certificate named `Life-Update Signing`
+rather than ad-hoc. This matters: macOS ties Screen Recording permission
+to the signature's designated requirement, and ad-hoc signatures change
+every build - which silently invalidated the permission on every update.
+A stable identity keeps grants alive across releases. Create yours once:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -keyout k.pem -out c.pem -days 3650 -nodes \
+  -subj "/CN=Life-Update Signing" \
+  -addext "basicConstraints=critical,CA:false" \
+  -addext "keyUsage=critical,digitalSignature" \
+  -addext "extendedKeyUsage=critical,codeSigning"
+openssl pkcs12 -export -legacy -out i.p12 -inkey k.pem -in c.pem -passout pass:x
+security import i.p12 -k ~/Library/Keychains/login.keychain-db -P x -T /usr/bin/codesign
+rm k.pem c.pem i.p12
+```
+
+(Or set `bundle.macOS.signingIdentity` back to `"-"` for ad-hoc local builds.)
+
 ### Building the installer
 
 ```bash

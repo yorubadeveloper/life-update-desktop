@@ -39,7 +39,7 @@
       "resources/ai-helper": "ai-helper"
     },
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "Life-Update Signing"
     },
     "createUpdaterArtifacts": true
   },
